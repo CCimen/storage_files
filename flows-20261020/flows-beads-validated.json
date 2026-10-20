@@ -1,0 +1,1736 @@
+[
+ {
+  "id": "eneo-0d05",
+  "title": "Integration worker child env: make LiteLLM hermetic for every flows child process",
+  "priority": 2,
+  "status": "open",
+  "description": "Follow-up from the P0 tip fix (2026-10-01): backend/tests/integration/flows/conftest.py:586 _flow_worker_environment builds every child-process env and lets LiteLLM fetch its model-cost map from github at import; when github is unreachable the fetch retries and pushes child startup past test budgets. Set LITELLM_LOCAL_MODEL_COST_MAP=True in that one allowlist owner (providers are scripted in tests) and drop the per-test override added in ba9313a9b.",
+  "validation": {
+   "id": "eneo-0d05",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "test_debt",
+   "real_improvement": false,
+   "priority_ok": "Close",
+   "evidence": "backend/tests/integration/flows/conftest.py:621-627 _flow_worker_environment sets LITELLM_LOCAL_MODEL_COST_MAP=True; no per-test override left in tests/integration (grep); landed in commit 56c3d9c58",
+   "note": "The one allowlist owner now sets the variable, with a comment saying why, and the per-test override is gone. Nothing left to do."
+  }
+ },
+ {
+  "id": "eneo-0ml",
+  "title": "A8 Template-fill provenance navigation: per-placeholder binding lineage projected into the run view",
+  "priority": 3,
+  "status": "open",
+  "description": "Reuse existing per-placeholder binding lineage (template_fill_runtime.py ~452); add the missing navigation/projection; the DOCX writer must not become another provenance owner; passage-level tracing depends on A4.",
+  "validation": {
+   "id": "eneo-0ml",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (feature; depends on A4)",
+   "evidence": "backend/src/eneo/flows/runtime/template_fill_runtime.py:445-500 (per-placeholder edges, binding_ref=output_config.bindings.<name>), :279-285 (template_provenance holds only template identity); frontend/apps/web/src/lib/features/flows/flowEvidenceProvenance.ts:72; no binding_ref use under frontend/apps/web/src/lib/features/flows",
+   "note": "The backend already records per-placeholder binding lineage; the web run view shows only the template identity (template_provenance) and never the per-placeholder lineage. The gap is a UI projection feature, not a defect, and passage-level tracing is blocked on A4."
+  }
+ },
+ {
+  "id": "eneo-0t7x",
+  "title": "Truncated structured results are accepted as successful outside flows",
+  "priority": 1,
+  "status": "open",
+  "description": "Astra, session capacity-refusal-necessity it3 (P1, source-verified): non-streaming keeps finish_reason, but CompletionService returns the completion without checking it (completion_service.py:976; adapter:413, :1574). Assistants, apps and services accept the text. Schema parsing validates content, not completeness: valid JSON with finish_reason length still passes (services/service_runner.py:83). Streaming also executes tool calls after a length stop, because the streaming loop does not retain the terminal reason (adapter:2136), while the non-streaming loop already guards it (adapter:1383).\n\nSmallest fix per Astra: preserve terminal reasons through streaming; one shared truncation check when accepting a structured result (explicit response_format or an existing schema-output consumer); typed incomplete-output failure on length; streaming marks delivered content incomplete and ends in a terminal failure; plain text keeps the notice behaviour; the flow guard keeps its current outward error.\n\nScope: shared model layer - owner approval needed before implementation (see flows scope rule). Related: eneo-8nv2, eneo-jg0x (flow truncation guard).",
+  "validation": {
+   "id": "eneo-0t7x",
+   "scope": "other",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "P2 and move to found-outside-scope: shared model layer, needs owner approval, flows keep their own guard",
+   "evidence": "completion_models/infrastructure/adapters/tenant_model_adapter.py:1694 (non-streaming loop guards finish_reason != length), :2575-2586 (streaming loop executes tool calls on result.has_tool_calls with no length check although res.finish_reason is now retained at :2366-2368); services/service_runner.py:83-84 parses ai_response.completion.text without reading finish_reason; no check in completion_models/infrastructure/completion_service.py",
+   "note": "Partly changed since the filing: the streaming adapter now keeps finish_reason and emits it on the stop chunk (:3261), but no caller rejects a length stop for structured results (service runner) and streaming tool calls still run after a length stop. Outside flows scope: record in demo-stack/specs/found-outside-scope.md, do not fix in the flows lane."
+  }
+ },
+ {
+  "id": "eneo-1eag",
+  "title": "Flow editor: an edit typed while the publish request is in flight is discarded without a notice",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-11 by the FLOWS robustness frontend sweep (source reading, medium confidence). routes/(app)/spaces/[spaceId]/flows/[flowId]/+page.svelte publish handler: await flowEditor.flushSaves(); const published = await eneo.flows.publish(...); flowEditor.setResource(published). setResource replaces persisted and editable state; publishLoading only disables the buttons, so a name or description typed during the POST disappears and the status shows saved. FlowEditor.test.ts 'reports saved and lets a flush finish after a publish replaced an edited draft' pins the current behaviour, so this needs a product choice: make the draft read-only while publishing, or keep the extra edits and save them after publish.",
+  "validation": {
+   "id": "eneo-1eag",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (needs a product choice first)",
+   "evidence": "frontend/apps/web/src/routes/(app)/spaces/[spaceId]/flows/[flowId]/+page.svelte:666-672 (flushSaves, publish, setResource; publishLoading only disables buttons at 637/652/663); lib/features/flows/FlowEditor.ts:1282-1288 setResource clearAutoSaveTimer then replaces state; FlowEditor.test.ts:1921-1943 pins the behaviour",
+   "note": "Handler is unchanged; an edit typed during the publish POST is dropped and the status reads saved. Real but narrow (a few-hundred-ms window); fix needs the product decision stated in the bead (read-only while publishing is the simplest)."
+  }
+ },
+ {
+  "id": "eneo-1gcl",
+  "title": "Flows: bound the models_used evidence read in the interactive view",
+  "priority": 2,
+  "status": "open",
+  "description": "Observable problem: a run-evidence view can load an unbounded list of model names. `FlowProviderCallRepository.list_models_used_by_step` (added by 987936efb, backend/src/eneo/flows/infrastructure/flow_provider_call_repo.py:497-514) materialises every distinct (step_id, model) row of a run without a limit. The interactive evidence view bounds every other read as a memory-protection invariant (RUN_VIEW_MAX_LOADED_SECTION_ROWS = 500 and byte budgets, backend/src/eneo/flows/application/flow_run_evidence_service.py:129-138 and :798-804); the read at :1002 gets no such limit. `response_model` is provider-supplied String(255) (database/tables/flow_tables.py:1416), so a provider that varies the name per call makes the result grow with the completed calls of the run; the result is also copied into the debug projection and the run union (flow_run_evidence.py:216-218, :279-280).\n\nFound 2026-10-11 by the Codex second opinion on the evidence query ceiling (session cleanup-evidence-ceiling-20261011b, gpt-6.1-sol high); verified in source by the cleanup lead. Not caused by, and not part of, the 2026-10-11 joint landing batch.\n\nFix at the existing owners (repository + evidence service): bound the distinct rows before materialisation (ceiling + 1) and answer with an explicit typed error when exceeded, reusing the service's existing view limits. Never truncate silently: the contract is the whole run. No index or grouping defect was found; do not fold the read into list_usage_for_runs (it also serves run listings).\n",
+  "validation": {
+   "id": "eneo-1gcl",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P2 (lower to P3 if response_model names are always provider-bounded in practice; the read is unbounded as written)",
+   "evidence": "backend/src/eneo/flows/infrastructure/flow_provider_call_repo.py:475-515 (select ... .distinct(), no limit); caller flows/application/flow_run_evidence_service.py:1001; ceiling constant RUN_VIEW_MAX_LOADED_SECTION_ROWS=500 at :138",
+   "note": "list_models_used_by_step still materialises every distinct (step_id, model) row of a run with no limit and the view's row ceiling is not applied to it. Fix as described: ceiling+1 bound and a typed refusal in the evidence service, no silent truncation."
+  }
+ },
+ {
+  "id": "eneo-2yl",
+  "title": "Stream flow-step completions so proxy idle timeouts cannot cut long generations",
+  "priority": 1,
+  "status": "open",
+  "description": "Run 23307d61 (2026-09-15 13:43 CEST, flow f96e8648) step 2 failed flow_provider_unavailable after 125.7 s: HAProxy in front of https://gpu.sundsvall.se returned its 504 page (timeout server ~2 min) while vLLM completed at 13:45:31 with 200 OK. Non-streaming completion sends nothing for the whole generation, so every inactivity timeout on the path (HAProxy client/server, any NAT) is a hard ceiling on answer length. Infra mitigation: timeout server/client 900s on that HAProxy. Durable fix: flow-step completions stream through the same provider-call owner the Builder already uses (silence-bounded deadline, see ai-builder-streaming-silence-deadline-20260911), so a token flows every few hundred ms; keep the step deadline as the only Eneo-side ceiling. Also confirm litellm.Timeout from a proxy 504 maps to provider_unavailable retryable=True (it did here). Evidence: worker log 11:45:30Z error_type=Timeout, exception body '504 Gateway Time-out The server didn't respond in time.'",
+  "validation": {
+   "id": "eneo-2yl",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "P2 (infra 900 s timeout mitigation exists; parked/owner-approved plan with slices S1-S4); P1 is high.",
+   "evidence": "flows/runtime/step_execution_runtime.py:702 (stream=False for flow steps); completion_models/infrastructure/adapters/tenant_model_adapter.py:2003 (stream only when native_json_request and the route supports it)",
+   "note": "Streaming exists only for native-JSON steps; plain text, markdown, Word and capability-fallback steps still wait for the whole answer, so a proxy idle timeout can still cut long generations. Plan streaming-step-completions-plan.md covers the remaining work; the local S2 branch is unlanded."
+  }
+ },
+ {
+  "id": "eneo-3hig",
+  "title": "Package templates: combined metadata preflight before inspection; docs count template asset slots",
+  "priority": 3,
+  "status": "open",
+  "description": "sync-v1e gate it3 GREEN (7099d7c91) P3 residue: (1) _packaged_templates inspects included templates before replacement candidates are counted (flow_package_template_uploads.py:122/:194/:165) - a 40 MiB included template + two replacements inspects the included file before refusing the 120 MiB total; do one combined metadata pass (both candidate groups) before any inspection. (2) flows.mdx:115 says reuse counts once per STEP; it counts per template asset slot (two steps sharing one requirement = one slot, one asset attached to both) - correct the docs and replace 'before any work starts'.",
+  "validation": {
+   "id": "eneo-3hig",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "backend/src/eneo/flow_packages/application/flow_package_template_uploads.py:122 (_packaged_templates runs before uploads are counted), :174-195, :197-260; frontend/apps/docs-site/src/content/docs/flows.mdx:121-124",
+   "note": "resolve_flow_package_template_files fully resolves/inspects included templates via _packaged_templates (122) before upload sizes enter the unpacked total, so the combined bound is not checked before the first inspection. The docstring and code count per slot, yet flows.mdx:124 still says 'once per step' and :121 says 'before any work starts'. Both parts hold; small fix."
+  }
+ },
+ {
+  "id": "eneo-4sxz",
+  "title": "Deferred: name a transcript's speakers after the run (speaker_names in corrections)",
+  "priority": 4,
+  "status": "open",
+  "description": "Deferred by the owner 2026-09-23 21:45 ('necessary and logical, nothing very hard'). Today speaker_edits accept only SPEAKER_NN labels (flow_models ~2880, transcript_corrections ~364); names are owned by the speaker-mapping step and set at its review pause. Option if post-run naming proves needed (flows without a mapping step, or a wrong name found after the run): speaker_names {SPEAKER_NN: name} in the corrections set (same PATCH, revision, hash), one precedence owner (corrections > mapping), applied by regeneration and the GET; migration if the set is column-per-concern. Brief draft: scratchpad brief-transcript-speaker-names.md; research map from t4-speaker-labels to be attached. Module today: naming dialog at the review pause; 'Ändra talare' per passage (merge via 'Alla N inlägg'); mapping names in exports.",
+  "validation": {
+   "id": "eneo-4sxz",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "close (done)",
+   "evidence": "commit 411c98b82 'store speaker names with the transcript corrections'; api/flow_models.py:3195-3210 (speaker_names, run_not_completed refusal); application/flow_transcript_corrections_service.py:132-138; domain/speaker_labels.py apply_speaker_names; frontend transcriptCorrectionsController.svelte.ts:60,365 and TranscriptPlayer.svelte:62,177",
+   "note": "The bead's own 'option' is implemented: speaker_names live in the corrections set (same PATCH), applied on completed runs, and used by the transcript UI. The 'speaker_edits accept only SPEAKER_NN' description is out of date."
+  }
+ },
+ {
+  "id": "eneo-5gen",
+  "title": "Flows: webhook integration tests drive the test-only FlowRunWebhookDeliveryService.deliver_due, not the production wave path",
+  "priority": 3,
+  "status": "open",
+  "description": "Found by the A2 adversary (quality program, lane qa2-webhook-budget c018e013f). deliver_due (flows/runtime/flow_webhook_delivery.py ~169-186) has no src caller (tasks.py uses the wave loop in _deliver_flow_webhook_outbox); it claims up to 50 rows up front under one deadline. More than 20 webhook integration tests call it, so they test a path production never runs. Fix: move those tests to the production task path (or make deliver_due the same wave function) and delete deliver_due.",
+  "validation": {
+   "id": "eneo-5gen",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "test_debt",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "flows/runtime/flow_webhook_delivery.py:169-186 deliver_due has no src caller (runtime/tasks.py:901 calls the audit service's deliver_due, a different class; the webhook job uses claim_due_batch/deliver_claimed waves at tasks.py:925-966); rg '.deliver_due(' in tests/integration/flows/test_flow_webhook_outbox_delivery.py = 24 calls",
+   "note": "Confirmed: production never runs the claim-up-front path, yet 24 webhook integration tests drive it. Moving them to the wave function (or making deliver_due that function) and deleting the test-only path removes a real divergence."
+  }
+ },
+ {
+  "id": "eneo-5h8",
+  "title": "Published flow: explain that approving a step edit unpublishes it, at the entry not only at approval",
+  "priority": 3,
+  "status": "open",
+  "description": "Follow-up to eneo-caa. On a published flow the step panel shows 'Publicerad - kan inte redigeras' and now also 'Ändra det här steget med AI'. Those two read as a contradiction until the user reaches the review footer, which explains that approving unpublishes the flow until it is published again. Put that consequence at the entry (tooltip or one line beside the button when published) in natural Swedish, reusing the footer's wording so the two agree.",
+  "validation": {
+   "id": "eneo-5h8",
+   "scope": "flows_web",
+   "state": "partly_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (small UX clarity fix, sv+en copy)",
+   "evidence": "components/FlowStepEditPanel.svelte:1039-1065 (AI menu shown on published flows with a comment about unpublishing, but no consequence text at the entry); FlowStepAIMenu.svelte:51-60; routes/(app)/spaces/[spaceId]/flows/[flowId]/+page.svelte:713-718 (banner flow_published_readonly); messages/sv.json:7024 ai_builder_footer_edit_unpublishes; BuilderReviewScreen.svelte:2248",
+   "note": "The consequence is still explained only in the Builder review footer, not at the step entry. The 'Publicerad - kan inte redigeras' wording no longer exists; the banner now says flow is published and to choose Redigera, and does not mention the AI path, so the contradiction reads slightly differently. Reuse ai_builder_footer_edit_unpublishes wording."
+  }
+ },
+ {
+  "id": "eneo-5kx",
+  "title": "A10 Curated starting points: a small vetted flow-package catalogue over the existing import",
+  "priority": 3,
+  "status": "open",
+  "description": "Start with supported packages; DOCX template asset installation is currently rejected by flow_package_install_service.py (~283); no second template compiler.",
+  "validation": {
+   "id": "eneo-5kx",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (no demand evidence)",
+   "evidence": "backend/src/eneo/flow_packages/application/flow_package_install_service.py:99-178,:227-236 (DOCX template assets are installed via template_files/TemplateImportIntent); backend/src/eneo/flow_packages/api/flow_package_router.py:177 (catalog review only mentioned in a docstring)",
+   "note": "The caveat that DOCX template asset installation is rejected is obsolete: v2 packages install template assets. No curated catalogue exists (grep finds none), so the feature itself is unbuilt, with no user demand evidenced; a product feature rather than a fix."
+  }
+ },
+ {
+  "id": "eneo-5uce",
+  "title": "Web E2E: Word template authoring specs flake under CI timing (two different failures on d112b62ad)",
+  "priority": 2,
+  "status": "open",
+  "description": "Image build run 39372858708 on d112b62ad. Attempt 1: tests/flow-word-template-authoring.spec.ts:543 'template fields stay usable on laptops, desktop and ultrawide displays with keyboard controls': expect.poll (5000 ms) for savedTemplate(...).bindings.dokument == '{{datum}}' got undefined (line 559). Attempt 2 (auto rerun): that test passed, tests/flow-word-package-templates.spec.ts:214 'omitted Word template requires matching fields and recovers without losing model selection' hit the 30 s test timeout. Four earlier full runs on this branch (39318478928, 39324031825, 39330278155, 39336328056) had green E2E. Changes since a80280ae1 in apps/web are dead-code deletions only (svelte-check clean, 2593 flows web tests green). Likely: an autosave/debounce wait bounded by a fixed 5 s poll and a fixed 30 s test budget. Fix: wait on the save response/state instead of a wall-clock poll; give the long authoring flow an explicit timeout; check the trace artifacts (test-results/*/error-context.md) of both attempts. Attempt 3 of the run was started to complete the release bundle.",
+  "validation": {
+   "id": "eneo-5uce",
+   "scope": "flows_web",
+   "state": "already_fixed",
+   "category": "test_debt",
+   "real_improvement": false,
+   "priority_ok": "Close; P2 no longer applies.",
+   "evidence": "frontend/apps/web/tests/flow-word-template-authoring.spec.ts:17-19 (expectSaved = expect.configure({timeout: 15_000}) used at :543-560) and flow-word-package-templates.spec.ts:218-219 (test.setTimeout(120_000)); commit 3704a79fd 'give queued Word-template saves and the package import room on a loaded runner'",
+   "note": "Both cited flakes (5 s poll, 30 s test budget) were addressed by 3704a79fd with larger bounds. It is not the response-wait rewrite the bead proposed, but both failing sites are covered; whether CI is now stable is UNKNOWN."
+  }
+ },
+ {
+  "id": "eneo-7azt",
+  "title": "Tidy tip 58a9635c6 has pre-existing test failures: 10 in tests/unit, 3 in tests/integration/flows",
+  "priority": 1,
+  "status": "open",
+  "description": "Found 2026-09-16 22:20 by two workers (capacity iteration 2 and streaming pass 3); the streaming worker reproduced every failure on an exported tidy HEAD 58a9635c6 with the standard env, so these are not caused by either lane. Not yet orchestrator-verified. tests/unit: test_ai_builder_error_code_discipline::test_ai_builder_public_exceptions_use_typed_error_classes; test_completion_model_kwargs_capabilities (3: normalizes_invalid_capabilities_before_public_assembly, sparse_completion_model_preserves_provider_identity_without_widening, public_completion_model_preserves_litellm_capabilities); test_flow_audit_coverage_contract::test_every_significant_flow_route_has_an_audit_decision; test_flow_openapi_contract (4: request bodies have examples, success responses have examples, explicit examples validate, evidence export documents json attachment); test_server_startup_imports::test_flow_api_router_modules_export_only_router. tests/integration/flows: test_flow_package_import_data_model (2: failed_record_survives_draft_savepoint_rollback, export_import_route_roundtrip_between_tenants_and_container_instances; the mocked import candidate declares no input capacity and is refused model_capacity_unknown, likely since S-D c2a 58a9635c6); test_flow_run_repository::test_cohort_readers_return_step_metrics_and_current_attempt_lineage (reads nonexistent FlowStepResultMetrics.num_tokens_input). Separate from the owner's own hygiene sessions, which cover the two tests/unittests/flows failures (reserved input payload keys, variable manifest) and the dead model-defaults wrapper. First step: verify on the tidy clone, then fix each at its owner before the next landing.",
+  "validation": {
+   "id": "eneo-7azt",
+   "scope": "flows_core",
+   "state": "stale_or_obsolete",
+   "category": "test_debt",
+   "real_improvement": false,
+   "priority_ok": "P1 too high: snapshot of 2026-09-16 tidy tip 58a9635c6; close or P4, re-measure once instead.",
+   "evidence": "backend/src/eneo/flows/infrastructure/flow_run_repo.py:357-367 (FlowStepResultMetrics now has usage_receipt, the nonexistent num_tokens_input premise is gone); bead's own 2026-09-30 note says stale, replaced by eneo-hpj/qqi/c8js",
+   "note": "Stale pre-existing-failure snapshot from a tip 4 weeks old; the cited tests/fields have been reworked and later per-failure beads replace it. I did not run the tests, so per-test current status is UNKNOWN; re-measuring once is the only useful action."
+  }
+ },
+ {
+  "id": "eneo-7cet",
+  "title": "Flows: a webhook row whose preparation always outlasts the send deadline is released forever without an attempt",
+  "priority": 3,
+  "status": "open",
+  "description": "Found by the A2 adversary (c018e013f). release_unsent_claim gives the attempt back and leaves next_delivery_at unchanged, so a row whose preparation always takes longer than the send window (~135 s) is claimed, released and reclaimed forever, holding a maintenance slot ~165 s each time; only the backlog health flag shows it. Also a send that starts with milliseconds left is charged an attempt. Candidates: a minimum send window; a release counter/log, or a small backoff after a release. Design note first.",
+  "validation": {
+   "id": "eneo-7cet",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "robustness",
+   "real_improvement": false,
+   "priority_ok": "P3 ok; lower if anything (reach unproven)",
+   "evidence": "flows/infrastructure/flow_run_webhook_delivery_repo.py:368-392 release_unsent_claim decrements delivery_attempts and leaves next_delivery_at; flows/runtime/flow_webhook_delivery.py:374-391 timeout_at(sends_end_at) raises WebhookSendNotStartedError, :268-269 releases",
+   "note": "Mechanism is as described, but the row only loops if preparation (DB reads) always outlasts the shared job deadline, which has no known cause; an ordinary job running out of time releasing a row is intended. Speculative until a row that never prepares is shown; a release counter is optional hardening."
+  }
+ },
+ {
+  "id": "eneo-7fh",
+  "title": "Flows list: page title and its content column do not share a left edge",
+  "priority": 3,
+  "status": "open",
+  "description": "Measured live 2026-09-14 at a 1800 px viewport on the flows list: the heading 'Flöden' starts at x=301 while the search field and the flow table start at x=565, a 264 px mismatch, and the primary action 'Skapa flöde' sits 31 px from the right edge. The header row is full-bleed while the content is a centred narrow column, so the title floats away from the thing it titles at wide widths. Decide one content width for the page and align the header to it (or centre both), and check the other flows pages for the same split.",
+  "validation": {
+   "id": "eneo-7fh",
+   "scope": "flows_web",
+   "state": "already_fixed",
+   "category": "quality",
+   "real_improvement": false,
+   "priority_ok": "close (done)",
+   "evidence": "commit 6fe6afb7c 'the flows list spans the page at every width'; routes/(app)/spaces/[spaceId]/flows/+page.svelte:96-101 (w-full container, comment: starts on the title's left edge, ends on the header actions' right edge)",
+   "note": "The centred narrow column is gone: content is full width and aligned to the header. The 'check other flows pages' follow-up was not verified here."
+  }
+ },
+ {
+  "id": "eneo-7jo5.106",
+  "title": "Avoid duplicated Flow page parent type shape",
+  "priority": 3,
+  "status": "open",
+  "description": "NON-BLOCKING follow-up from sole composition adversary GREEN8. Current Flows +page.ts duplicates parent fields in its structural event parameter. Current runtime and whole-web types pass; no current failing input demonstrated. Consider using canonical SvelteKit generated PageLoad/parent types when next changing this owner, while preserving direct route behavior tests without casts/Any across module boundaries or an abstraction with one user. Original A7 paging/no-partial publication and no arbitrary total cap remain unchanged. Do not spend a gate round for this item; it does not block current candidate, landing or programme acceptance.\n",
+  "validation": {
+   "id": "eneo-7jo5.106",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "suggest P4 or close as taste; bead itself says no gate round",
+   "evidence": "frontend/apps/web/src/routes/(app)/spaces/[spaceId]/flows/+page.ts:7-14 structural event type duplicating parent fields (Eneo, currentSpace, user)",
+   "note": "Still present exactly as described; no failing input, types compile. Taste-level typing cleanup to do only when the owner next changes; not a measurable gain."
+  }
+ },
+ {
+  "id": "eneo-7jo5.114",
+  "title": "Run error should name a step timeout above the organisation maximum",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 while planning the typed-codes batch (specs/cleanup/typed-codes-20261012/plan.md, slice G1b).\n\nToday (frozen tree 0d630d692):\n- flows/api/flow_models.py:653 (OpenAPI description of FlowStepCreate.timeout_seconds, copied into schema.d.ts) says a\n  step timeout above the effective policy maximum \"is refused with `flow_step_timeout_exceeds_tenant_max`\".\n- No request path checks it. The only caller of flow_runtime_policy.resolve_step_timeout_seconds is the worker\n  (runtime/executor.py:447 step_deadline_seconds). _start_step_deadline (executor.py:1390-1400) re-raises the\n  BadRequestException as TypedIOValidationException(code=exc.code), and _typed_io_failure_code (executor.py:344-353)\n  turns every code outside FLOW_TYPED_IO_ERROR_CODES into typed_io_validation_failed. So the run fails with a generic\n  validation code and the reader gets the generic sentence; no client ever receives flow_step_timeout_exceeds_tenant_max.\n\nDone in the typed-codes batch (narrow form, plan review pass 1): the description is corrected to what happens and the\ntwo code arguments nobody can receive are deleted.\n\nThis bead (not started): the run error should name the cause.\n- A step whose timeout exceeds the organisation maximum fails the run with its own catalogued code and a sv+en sentence\n  that says to lower the step timeout or ask an administrator to raise the maximum.\n- Needs its own terminalization path: executor.py:1140 sends other exception types to the generic failure handling, so\n  raising a different exception type is not enough.\n- Evidence required: stored step status and run status/error code for the case, red-first at the executor.\n- Consider refusing at save or publish as well (the policy can change after publish, so the run-time check stays).\n- Public change (a run error code changes for this case): name it in the brief; catalogue obligations per member apply\n  (taxonomy \"Run error payload\", SDK, web copy, reference row).\n",
+  "validation": {
+   "id": "eneo-7jo5.114",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (public error-code change, needs catalogue/SDK/web copy; low frequency)",
+   "evidence": "backend/src/eneo/flows/flow_runtime_policy.py:372-386 (BadRequestException without code), runtime/executor.py:525-531 and :1493-1500 (_start_step_deadline re-raises as TypedIOValidationException(code=exc.code)), flow_api_error_code.py:410-421 typed_io_failure_code maps unknown/None code to TYPED_IO_VALIDATION_FAILED; no flow_step_timeout_exceeds_tenant_max anywhere at tip; api/flow_models.py:652-656 description corrected",
+   "note": "OpenAPI description was corrected as the bead says. The run still fails with generic typed_io_validation_failed because the BadRequestException carries no code (code=None), so the reader never learns the step timeout exceeds the organisation maximum. Genuine but narrow UX/diagnostic gap; no save/publish-time check exists."
+  }
+ },
+ {
+  "id": "eneo-7jo5.115",
+  "title": "Organisation flow-settings page words refusals through the Flow error catalogue",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 in the typed-codes batch (specs/cleanup/typed-codes-20261012/plan.md, slice G1; gate round 1 finding F2,\nspecs/gate-out artifacts of session cleanup-g1-catalogue-20261012).\n\nToday (lane tip 758fb98ba, fix/cleanup-typed-codes-20261012):\n- The four organisation flow-settings refusals a route can answer are FlowApiErrorCode members with a Swedish and an\n  English sentence: flow_settings_invalid_payload, default_timeout_exceeds_tenant_max,\n  tenant_max_exceeds_env_hard_ceiling, max_concurrent_runs_exceeds_server_capacity\n  (frontend/apps/web/src/lib/features/flows/flowRuntimeErrorMapping.ts:270-274).\n- The organisation flow-settings page does not read the catalogue. It recognises one code through its own literal,\n  `RUN_CAPACITY_EXCEEDED_CODE = \"max_concurrent_runs_exceeds_server_capacity\"`\n  (frontend/apps/web/src/routes/(app)/admin/flow-settings/flowSettingsAdminSave.ts:60), and shows its own message\n  `flow_run_limit_exceeds_capacity_error` (messages/en.json:4680, sv.json:4680), which is word for word the catalogue's\n  `flow_error_max_concurrent_runs_exceeds_server_capacity` (en.json:5009, sv.json:5009). The other three refusals reach\n  the reader as the platform's general toast.\n\nWanted (owner of the admin flow-settings page; the page and its save module are Gallring-listed, so the typed-codes\nbatch did not touch them):\n- The page words a refused save through the catalogue map (the generated FlowApiErrorCode set), so all four refusals\n  show their own sentence.\n- The literal and the duplicate message key `flow_run_limit_exceeds_capacity_error` are removed; one owner per sentence.\n\nCheck: a save refused with each of the four codes shows the catalogue sentence in sv and en; no string literal equal\nto a catalogue value remains under routes/(app)/admin/flow-settings.\n",
+  "validation": {
+   "id": "eneo-7jo5.115",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "frontend/apps/web/src/routes/(app)/admin/flow-settings/flowSettingsAdminSave.ts:60 (RUN_CAPACITY_EXCEEDED_CODE literal), FlowSettingsAdminView.svelte:481 (toast of m.flow_run_limit_exceeds_capacity_error), messages/en.json:4844 vs :5297 (identical sentence, flow_error_max_concurrent_runs_exceeds_server_capacity), flowRuntimeErrorMapping.ts catalogue map",
+   "note": "Line numbers in the bead moved (en.json 4680->4844, 5009->5297) but the duplicate literal and duplicate message key are both still present; other three refusals still fall to the generic toastError. Real one-owner-per-sentence cleanup plus a small UX gain (three refusals get their own sentence). Page is Gallring-listed, so coordinate."
+  }
+ },
+ {
+  "id": "eneo-7jo5.116",
+  "title": "Catalogued Flow error values are still string literals in settings and files",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 in the typed-codes batch (specs/cleanup/typed-codes-20261012/plan.md; landed as 09266e349).\n\nToday (landed tip 09266e349):\n- `flow_settings_invalid_payload` and `flow_template_too_large` are FlowApiErrorCode members, but their reachable\n  producers still write the value as a string: backend/src/eneo/settings/setting_service.py:125\n  (`FLOW_SETTINGS_INVALID_PAYLOAD_CODE = \"flow_settings_invalid_payload\"`, used by ten raises in that file and by\n  settings_router.py's documented 400 answers) and backend/src/eneo/files/docx_template_validation.py:57,63\n  (`code=\"flow_template_too_large\"`).\n- The batch did not touch them: settings/ is on the Gallring owned-files list and files/ is outside the Flows paths.\n  The catalogue test only scans backend/src/eneo/flows, so nothing fails if one of the two strings drifts.\n\nWanted (owner of those files): bind the constant to the member (`FlowApiErrorCode.SETTINGS_INVALID_PAYLOAD`) and pass\n`FlowApiErrorCode.TEMPLATE_TOO_LARGE` at the two raises; no wire change.\n\nCheck: the two values appear as string literals nowhere under backend/src/eneo outside the enum; responses unchanged.\n",
+  "validation": {
+   "id": "eneo-7jo5.116",
+   "scope": "other",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "backend/src/eneo/settings/setting_service.py:126 (FLOW_SETTINGS_INVALID_PAYLOAD_CODE = \"flow_settings_invalid_payload\", used at 703,710 and more); backend/src/eneo/files/docx_template_validation.py:57,63 (code=\"flow_template_too_large\"); flows/flow_api_error_code.py:253,256 (the enum members exist)",
+   "note": "Both strings are still literals outside the enum. The files are in settings/ and files/, outside the flows paths (settings is on the Gallring owned-files list, per the bead), so a change needs coordination and does not belong in the flows lane."
+  }
+ },
+ {
+  "id": "eneo-7jo5.118",
+  "title": "Flows package API: flow_package_file_too_large has no enum owner; example codes are literals",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 in the typed-codes batch (landed as 09266e349).\n\nToday (landed tip 09266e349):\n- backend/src/eneo/flow_packages/api/flow_package_router.py raises `FileTooLargeException(code=\"flow_package_file_too_large\")`\n  at three sites (lines 729, 747, 934). That code has no enum owner: it is not a FlowPackageErrorCode member.\n- backend/src/eneo/flow_packages/api/flow_package_openapi_examples.py holds 15 documented example codes as string\n  literals (one of them the code above, line 220). `error_response` takes only enum members since the batch, so this\n  file could not be typed without first giving that code an owner.\n\nWanted (owner of the Flows package API): `flow_package_file_too_large` becomes a FlowPackageErrorCode member (with\nwhatever that catalogue requires), the three raises and the examples file use members.\n\nCheck: the Flows thread's `bare_error_code` matcher counts 0 under backend/src/eneo/flow_packages (3 today).\n",
+  "validation": {
+   "id": "eneo-7jo5.118",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "backend/src/eneo/flow_packages/api/flow_package_router.py:729,747,934 (code=\"flow_package_file_too_large\" literal); flow_package_openapi_examples.py:220; flow_packages/domain error enums have PACKAGE_BYTES_TOO_LARGE = \"flow_package_export_too_large\" but no member for flow_package_file_too_large",
+   "note": "Still three bare literals with no enum owner. The bead's check mentions a bare_error_code matcher that I could not find in this tip (UNKNOWN); the literal fix is still valid. The module is flow_packages, next to flows."
+  }
+ },
+ {
+  "id": "eneo-7jo5.119",
+  "title": "One idiom for passing a Flow error code: drop redundant .value and _value2member_map_",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 in the typed-codes batch (landed as 09266e349).\n\nToday (landed tip 09266e349):\n- FlowApiErrorCode is a StrEnum, so a member and its `.value` are the same on the wire, in str(), in f-strings and\n  in JSON. 255 call sites under backend/src/eneo/flows still pass `code=FlowApiErrorCode.X.value` to platform classes\n  whose parameter is `str | None` (TypedIOValidationException 178, BadRequestException 18, FileTooLargeException 13,\n  ConflictException 10, DocxTemplateContractError 9, FlowStepValidationError 6, others); 214 sites pass the member.\n  Nothing guards one form against the other, so both idioms grow.\n- backend/src/eneo/flows/application/flow_run_evidence.py:354-367 and :408 test membership through the private\n  `_value2member_map_` of five enums.\n\nWanted (cleanup, one mechanical slice after the Flows thread's ratchet has landed): one idiom per callee (the member),\nand a public membership check instead of `_value2member_map_`. No wire change; the wire-parity tool\n(specs/cleanup/typed-codes-20261012/parity.py) must report 0 differences.\n\nCheck: `grep -c \"FlowApiErrorCode\\.[A-Z_0-9]*\\.value\" -r backend/src/eneo/flows` is 0 or each remaining site has a\nstated reason; no `_value2member_map_` under backend/src/eneo/flows.\n",
+  "validation": {
+   "id": "eneo-7jo5.119",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3; do it as one mechanical slice with a guard so it does not regrow",
+   "evidence": "backend/src/eneo/flows: 367 FlowApiErrorCode.X.value uses (260 as code=...value), not the 255 in the bead; flows/application/flow_run_evidence.py:354,360,364,367,408 (_value2member_map_, 5 sites); no guard in tests/unittests/flows/test_flow_architecture_guards.py",
+   "note": "The claim holds and the count has grown. Both idioms still coexist and nothing guards them. Pure style/consistency with no wire change, so it needs the parity tool and an AST guard to be worth the churn."
+  }
+ },
+ {
+  "id": "eneo-7jo5.120",
+  "title": "Graph issue codes a flow update can answer have no row in the error reference",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 by the route-by-route trace of the typed-codes batch\n(specs/gate-out/adv-cleanup-g2-authoring-reach-330638cc6.md, section C; landed as 09266e349).\n\nToday (landed tip 09266e349):\n- PATCH /flows/{id}/ answers 400 `duplicate_step_order` (backend/src/eneo/flows/application/flow_service.py:1208,\n  `FlowGraphIssueCode.DUPLICATE_STEP_ORDER`; executed by the trace: HTTP 400 code='duplicate_step_order').\n- The code has an owner enum (flows/domain/flow_step_validation.py:36) and a web sentence\n  (flowStepValidationMessages.ts), but no row in guides/flows/reference/errors.mdx: it is neither in the catalogue nor\n  in the table \"Codes that are not FlowApiErrorCode\". The same may hold for other FlowGraphIssueCode values a save or\n  publish can answer; not enumerated.\n\nWanted (owner of the error reference): decide whether graph issue codes a request can answer get reference rows (a\nthird table, or membership in the catalogue), then list every such code with the route that answers it.\n\nCheck: every code a Flows route can answer with is findable in errors.mdx.\n",
+  "validation": {
+   "id": "eneo-7jo5.120",
+   "scope": "flows_docs_ci",
+   "state": "still_true",
+   "category": "docs",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "backend flows/domain/flow_step_validation.py:62 (DUPLICATE_STEP_ORDER in FlowGraphIssueCode); frontend/apps/docs-site/src/content/guides/flows/reference/errors.mdx has no duplicate_step_order, duplicate_step_name or flow_has_no_steps row; the section 'Codes that are not FlowApiErrorCode' is at line 91",
+   "note": "Still absent at the tip. The full set of graph codes a route answers is not enumerated in the bead; a generated check from the enum would close the class. Documentation gap, not a runtime defect."
+  }
+ },
+ {
+  "id": "eneo-7jo5.29",
+  "title": "Cleanup B1-02: Failure evidence attached by ad-hoc attributes on exceptions (untyped protocol) read by executor",
+  "priority": 2,
+  "status": "open",
+  "description": "# B1-02: Failure evidence attached by ad-hoc attributes on exceptions (untyped protocol) read by executor\n\nClassification: NON-BLOCKING\nReason: Untyped evidence carrier is a maintainability concern; no concrete wrong outcome in the verified row. Gallring-owned carrier remains a bead.\nDisposition: bead-only; owner: main/exceptions.py is shared (cross-domain): keep the helper in flows/runtime, do not touc\nFiles: backend/src/eneo/flows/runtime/step_execution_runtime.py,backend/src/eneo/flows/runtime/step_input_validation.py,backend/src/eneo/flows/runtime/step_handlers/mapped_completion.py,backend/src/eneo/flows/runtime/step_handlers/per_item_map.py,backend/src/eneo/flows/runtime/step_handlers/per_source_reader.py,backend/src/eneo/flows/runtime/step_handlers/mapped_outputs.py,backend/src/eneo/flows/runtime/executor.py\nProposal: One module with attach_failure_evidence/read_failure_evidence helpers (same attribute names, reads exc then __cause__) used by all writers/readers\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.29",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "Keep P2 at most; the ad-hoc setattr/getattr protocol is the likeliest source of silent evidence loss, but no wrong outcome is proved",
+   "evidence": "setattr/getattr on exceptions for rag_metadata, input_payload_json, effective_prompt, rejected_output, contract_validation, completed_items, total_items: runtime/step_execution_runtime.py:531-543,921,1365,1688-1690; step_input_validation.py:106-153; step_handlers/mapped_completion.py:297-302; mapped_outputs.py:145-146; executor.py:1440,1465,2405-2406,2503. No attach_failure_evidence helper exists.",
+   "note": "The untyped exception-attribute protocol is still spread over 7 files with string-named attributes, as the bead says. A single typed carrier with the same attribute names would remove the string-attribute reads and is the prerequisite that also simplifies .31. Maintainability gain is real but not a proved defect."
+  }
+ },
+ {
+  "id": "eneo-7jo5.31",
+  "title": "Cleanup B1-05: Three identical except-BaseException epilogues across mapped handlers; execution_mode typed as str",
+  "priority": 2,
+  "status": "open",
+  "description": "# B1-05: Three identical except-BaseException epilogues across mapped handlers; execution_mode typed as str\n\nClassification: NON-BLOCKING\nReason: Repeated exception epilogues and str annotation are maintainability debt; masking failure is separately B1-06.\nDisposition: bead-only; owner: runtime/step_handlers/mapped_outputs.py\nFiles: backend/src/eneo/flows/runtime/step_handlers/per_item_map.py,backend/src/eneo/flows/runtime/step_handlers/per_source_reader.py,backend/src/eneo/flows/runtime/step_handlers/mapped_completion.py\nProposal: One mapped_failure_epilogue in mapped_outputs.py; type the evidence arg with MappedExecutionMode; persisted values unchanged; after B1-06\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.31",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "Lower to P3: debt, no wrong outcome",
+   "evidence": "runtime/step_handlers/per_item_map.py:280-290, per_source_reader.py:269-280, mapped_completion.py:275-302 (partial-evidence epilogue); mapped_outputs.py:106 MappedEvidence.__init__(execution_mode: str) while MappedExecutionMode exists at domain/flow_step_attempt_input.py:28",
+   "note": "Three near-identical epilogues (set progress, admit rag_metadata, setattr partial) remain, and the evidence class still takes a str execution_mode. The mapped_completion variant lives in a finally block, so the dedup needs care. Natural to land together with .29 (shared exception-evidence carrier)."
+  }
+ },
+ {
+  "id": "eneo-7jo5.34",
+  "title": "Cleanup B3-03: Evidence reader duplicates iter_step_rag_payloads and builds the current-attempt map three times",
+  "priority": 2,
+  "status": "open",
+  "description": "# B3-03: Evidence reader duplicates iter_step_rag_payloads and builds the current-attempt map three times\n\nClassification: NON-BLOCKING\nReason: Repeated traversals/current-attempt maps currently return the same evidence.\nDisposition: bead-only; owner: domain/rag_evidence.py, application/flow_run_evidence.py\nFiles: backend/src/eneo/flows/application/flow_run_evidence.py,backend/src/eneo/flows/application/flow_run_export_json.py\nProposal: Replace _mutable_rag_payloads with iter_step_rag_payloads; one current_attempt_numbers helper (drop the \"one strictness\" item)\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.34",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "Lower to P3; merge with eneo-7jo5.38",
+   "evidence": "application/flow_run_evidence.py:701 _mutable_rag_payloads still exists while iter_step_rag_payloads (domain/rag_evidence.py:560, used at flow_run_export_json.py:572) is the read-only owner; current-attempt map built at flow_run_evidence.py:508-516 and :602-606, plus a different shape at flow_run_export_json.py:1024-1033",
+   "note": "Duplicate traversal and repeated current-attempt map are confirmed in flow_run_evidence.py (two copies there, a third variant in the JSON export). However iter_step_rag_payloads yields Mapping, not mutable dicts, so the replacement is not a drop-in and needs a mutable variant (overlaps .38). Same results today, so maintainability only."
+  }
+ },
+ {
+  "id": "eneo-7jo5.38",
+  "title": "Cleanup B4-03a: Six hand-written traversals of mapped-call collections in rag evidence (incl. application twin)",
+  "priority": 2,
+  "status": "open",
+  "description": "# B4-03a: Six hand-written traversals of mapped-call collections in rag evidence (incl. application twin)\n\nClassification: NON-BLOCKING\nReason: Equivalent collection traversal duplication; no incorrect evidence proved.\nDisposition: bead-only; owner: flows/domain/rag_evidence.py (+ flows/application/flow_run_evidence.py:699)\nFiles: backend/src/eneo/flows/domain/rag_evidence.py\nProposal: One iter_nested_call_payloads(payload, *, mutable) generator replacing the five traversals and the application twin\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.38",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "Lower to P3: duplicate traversal, no wrong evidence proved",
+   "evidence": "domain/rag_evidence.py:551,567,646,674,707 each loop over MAPPED_CALL_COLLECTION_KEYS; twin at application/flow_run_evidence.py:701-710 (_mutable_rag_payloads)",
+   "note": "Five traversals in rag_evidence.py plus the application twin still exist as described. Pure dedup; a generator replaces them without changing results, so the gain is modest. Do it only alongside .34 in the same touch."
+  }
+ },
+ {
+  "id": "eneo-7jo5.40",
+  "title": "Cleanup B5-12: flow_validators.py has 389/235/164-line functions; template section movable without a cycle",
+  "priority": 2,
+  "status": "open",
+  "description": "# B5-12: flow_validators.py has 389/235/164-line functions; template section movable without a cycle\n\nClassification: NON-BLOCKING\nReason: Function length and proposed extraction alone do not change observable correctness.\nDisposition: bead-only; owner: flow_validators.py\nFiles: backend/src/eneo/flows/flow_validators.py\nProposal: Pure moves/extractions (template section into flow_validators_template.py) after B5-06; no new rule table\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.40",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "Lower to P3: non-blocking, behaviour-neutral file reorganisation",
+   "evidence": "backend/src/eneo/flows/flow_validators.py:244 collect_step_graph_issues 416 lines, :1833 _validate_binding_references 231, :2066 _validate_source_ref_contracts 164 (AST count); flow_validators_template.py already exists (168 lines) and is imported at flow_validators.py:75",
+   "note": "Function sizes are stale (389/235/164 is now 416/231/164) and the template section was already moved into flow_validators_template.py, so the proposal is partly done. The remaining 2589-line module and long functions are real size debt, but a pure-move refactor with no defect behind it."
+  }
+ },
+ {
+  "id": "eneo-7jo5.70",
+  "title": "Cleanup V18: Run states described in three places (integrating-flows, run-lifecycle, flows-api-guide)",
+  "priority": 2,
+  "status": "open",
+  "description": "# V18: Run states described in three places (integrating-flows, run-lifecycle, flows-api-guide)\n\nClassification: NON-BLOCKING\nReason: Duplicate state descriptions; actual false state edge is independently BLOCKING V9.\nDisposition: bead-only; owner: integrating-flows (consumer) / run-lifecycle (internals)\nFiles: frontend/apps/docs-site/src/content/guides/flows/integrating-flows.mdx,frontend/apps/docs-site/src/content/docs/flows-for-developers/run-lifecycle.mdx,frontend/apps/docs-site/src/content/guides/flows-api-guide.mdx\nProposal: Consumer table in integrating-flows from /runs/status-capabilities/; run-lifecycle owns the mechanism\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.70",
+   "scope": "flows_docs_ci",
+   "state": "still_true",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "downgrade to P4: NON-BLOCKING duplicate-text cleanup",
+   "evidence": "frontend/apps/docs-site/src/content/guides/flows/integrating-flows.mdx:66-89 (six statuses, transitions, points to /runs/status-capabilities/); frontend/apps/docs-site/src/content/docs/flows-for-developers/run-lifecycle.mdx:6-20 (state diagram); frontend/apps/docs-site/src/content/guides/flows-api-guide.mdx:874-895",
+   "note": "Run states are still described in three places, but for different audiences (consumer, internals, API walkthrough) and integrating-flows already defers to the live status-capabilities endpoint. Cosmetic dedup only; no false edge found in the lines read."
+  }
+ },
+ {
+  "id": "eneo-7jo5.72",
+  "title": "Cleanup V20: Limits/defaults repeated across errors.mdx, integrating-flows, flows-api-guide",
+  "priority": 2,
+  "status": "open",
+  "description": "# V20: Limits/defaults repeated across errors.mdx, integrating-flows, flows-api-guide\n\nClassification: NON-BLOCKING\nReason: Repeated limits/defaults; actual false default is independently BLOCKING V8.\nDisposition: bead-only; owner: integrating-flows / deployment.mdx\nFiles: frontend/apps/docs-site/src/content/guides/flows/reference/errors.mdx\nProposal: integrating-flows Limits owns client-visible numbers; deployment.mdx owns env defaults; others link\n\nNON-BLOCKING items never buy a gate round. Builder deferred items are implemented only by the measurement-driven Builder program. No optional rewrite, compatibility shim or out-of-flows extraction is authorized by this record.\n",
+  "validation": {
+   "id": "eneo-7jo5.72",
+   "scope": "flows_docs_ci",
+   "state": "still_true",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "downgrade to P4: NON-BLOCKING duplicate-text cleanup, bead states it buys no gate round",
+   "evidence": "frontend/apps/docs-site/src/content/guides/flows/reference/errors.mdx:33 repeats FLOW_PDF_* defaults (2000 pages, 134217728 bytes, 900 s) that integrating-flows.mdx:2065-2069 also lists; guides/flows-api-guide.mdx also holds limit numbers",
+   "note": "The repetition exists, but errors.mdx already links to the integrating-flows Limits table and the numbers agree; the bead itself says the false default was a separate BLOCKING item (V8). Low value, risk of drift only."
+  }
+ },
+ {
+  "id": "eneo-7jo5.82",
+  "title": "A2 NON-BLOCKING owner reuse and section coverage",
+  "priority": 3,
+  "status": "open",
+  "description": "# NON-BLOCKING A2 owner/coverage follow-ups\n\nFrozen 77538bab3 Opus high adversary GREEN MIN 8, no blocker. No gate round for these.\n\n1. Consider canonical parse_authored_http_config owner reuse in A4. It produces localized typed_io_http_invalid_config, but also validates the stored URL; first prove whether a valid submitted draft snapshot may be tested against a saved invalid ignored URL. Do not blindly widen 400 refusal. Existing generic 400 is typed/safe, no universal localization claim.\n2. Optional stepId type tightening is taste/type debt, every producer currently passes it; no missing caller.\n3. Consider one section-level temporary HTTP step coverage when that owner changes substantively. Current parent wiring is source-verified, only leaf missing-id DOM is executed. No duplicate test-only slice or extra review.\n\nGate r1 GREEN MIN8 adds NON-BLOCKING wording suggestion: clarify `before saving an HTTP input/output step` as before saving configuration changes on an existing saved step. The preceding required saved-step sentence and UI prerequisite already constrain behavior; record this for the same documentation owner, no post-green code amendment or extra gate.\n",
+  "validation": {
+   "id": "eneo-7jo5.82",
+   "scope": "flows_docs_ci",
+   "state": "still_true",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "suggest P4; non-blocking, no gate round per its own text",
+   "evidence": "backend/src/eneo/flows/api/flow_http_test_router.py:57 (wording 'before saving an HTTP input or output step', copied to frontend/packages/eneo-js/src/types/schema.d.ts:5210); router :194 uses is_authored_config; components/http/HttpTestConnection.svelte:33 stepId?: string | null; parse_authored_http_config owner at http_transport/normalizer.py:20",
+   "note": "All three optional follow-ups plus the doc wording suggestion still open; none is a defect (typed generic 400, every producer passes stepId, leaf missing-id DOM already covered). Only the one-sentence wording clarification is cheap, and only worth doing when the router description is next touched (it regenerates the SDK schema)."
+  }
+ },
+ {
+  "id": "eneo-7vdh",
+  "title": "Probe: knowledge retrieval ProviderRejectedRequestException on 3 of 8 IBIC section steps",
+  "priority": 2,
+  "status": "open",
+  "description": "Owner run 34768545 (2026-09-21 21:41, package 1.0.1, Gemma-4-31B on vLLM, run completed 17/17 in 546 s). Steps 9, 10, 11 (Personlig vard, Hemliv, Relationer) report knowledge_retrieval status=error, retrieval_error_type=ProviderRejectedRequestException, error_code=rag_retrieval_failed, 150-200 ms, unique_sources 0; steps 5-8 and 12 with the same knowledge configuration retrieved 2 sources each. The steps completed without their sources, so the loss is silent in the result. Probe first: which provider rejected (embedding model for the query, or the retrieval service), and why only these three (query text length? section input shape?). The export has no error message text for the rejection: check the evidence contract records the provider's message for rag_retrieval_failed. Not part of eneo-siom/agvj/nnit.",
+  "validation": {
+   "id": "eneo-7vdh",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "Lower to P3: root cause needs the live 2026-09-21 run data (unverifiable), the evidence-gap part is a small separate fix",
+   "evidence": "backend/src/eneo/flows/runtime/rag_retrieval.py:196-213: on Exception it records only exc.__class__.__name__ as retrieval_error_type, error_code rag_retrieval_failed and the fixed diagnostic message 'RAG retrieval failed.'; the provider message goes only to logger.warning with exc_info; domain/rag_evidence.py:471-473 has no message field",
+   "note": "Why steps 9-11 were rejected cannot be determined from code (needs the run's logs or data). The second question is confirmed: the persisted evidence keeps the exception class but no provider reason, so a ProviderRejectedRequestException cannot be diagnosed from the export. The loss is not completely silent (an error diagnostic and status=error are recorded), but the step still completes without sources. Suggest splitting: a typed, sanitised reason on the retrieval record, and closing the probe part unless the data is available."
+  }
+ },
+ {
+  "id": "eneo-8han",
+  "title": "Flows: review checkpoint edit checks the author's contract in-process on the API loop",
+  "priority": 3,
+  "status": "open",
+  "description": "Found by the A3 adversary (gate-out/adv-qa3-killable-output-check-ce63f4d18.md). flow_run_review_checkpoint_service.py:361 calls validate_against_contract on a user-edited value on the API event loop; a backtracking pattern can stall the API worker. Moving it to contract_check.check_contract_in_child needs an owner decision: typed_io_contract_not_checked would appear on an API route (public contract).",
+  "validation": {
+   "id": "eneo-8han",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (needs an owner decision on a new code on an API route)",
+   "evidence": "flows/application/flow_run_review_checkpoint_service.py:349-371 _validate_against_output_contract calls validate_against_contract in-process (called at :585); flows/domain/schema_engine.py:166-169 evaluates with Python jsonschema/re, so a backtracking pattern can block",
+   "note": "Still the only runtime caller of the in-process validator besides publish-time flow_validators.py:1603. The author's contract is flow-author controlled, so reach is limited to hostile or careless contracts; the fix is blocked on the public-contract decision named in the bead."
+  }
+ },
+ {
+  "id": "eneo-9c7j",
+  "title": "Flows consumer skill: an LLM-readable guide for building web apps on Eneo Flows as the AI engine",
+  "priority": 2,
+  "status": "open",
+  "description": "Owner 2026-09-20 15:29: web apps and other systems consume Eneo Flows as their AI engine; future LLM-driven developers must be able to build such consumers easily and understand flows. Deliver (1) a consumer skill: one self-contained markdown skill (SKILL.md style, also published on the docs-site and served as llms.txt / llms-full.txt) covering the whole consumer contract: publish + run contract read, create run with Idempotency-Key, upload-driven runs and file admission limits, status polling vs the run-pinned graph, review checkpoints (approve, edit, approve-and-continue), retry from the failed step, evidence/provider calls, error taxonomy (every code with consumer_action, generated from flow_error_taxonomy so it cannot drift), execution limits (step budget, invocation ceiling, audio/PDF ceilings, inline text cap), webhooks, retention. (2) Keep the OpenAPI/Swagger exact: every flow route with responses metadata, request/response examples validated against schemas (the four failing tests in tests/unit/test_flow_openapi_contract.py become green: eneo-ymvk first), operation ids stable, the run-contract endpoint listing execution limits (eneo-f0xg item 2). (3) A consumer acceptance script that walks the skill end to end against a lane stack (the same walk a new web app would do) and is run at landing of consumer-facing slices. Generate what can be generated (error table, limits) from the taxonomy and settings; hand-write the narrative. Owner of the docs: frontend/apps/docs-site guides/flows; skill file under docs/ or the docs-site, decided with the owner.",
+  "validation": {
+   "id": "eneo-9c7j",
+   "scope": "flows_docs_ci",
+   "state": "partly_true",
+   "category": "docs",
+   "real_improvement": true,
+   "priority_ok": "Lower to P3 and split: the umbrella is mostly delivered, the remainder is a generated error table and a consumer acceptance script",
+   "evidence": "Delivered: frontend/apps/docs-site/skills/eneo-flows-api/SKILL.md plus references/ (endpoints-and-errors, inputs-and-results, review-evidence-and-retention), public/skills/eneo-flows-api.skill, src/content/guides/flows/agent-skill.mdx, scripts/build-llm-text.mjs emitting llms.txt, llms-full.txt, llms-flows.txt. Not delivered: references/endpoints-and-errors.md:60-106 is a hand-written error table (no taxonomy/consumer_action reference in docs-site/skills or scripts); no consumer acceptance script in backend/scripts (only check_flow_run_evidence_acceptance.py); flow_run_contract_service.py shows audio limits only",
+   "note": "The skill, the packaged download and llms files exist, so the bead description is stale. What is left: generate the error table from flow_error_taxonomy.py so it cannot drift, list execution limits in the run contract, and add a consumer acceptance walk. The four failing OpenAPI contract tests were not re-run here (read-only), so their state is UNKNOWN."
+  }
+ },
+ {
+  "id": "eneo-9s1m",
+  "title": "Flows API: malformed client input answers 500 in eight places (typed 4xx missing)",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-12 by the FLOWS robustness API sweep (source reading at target 854c49e25, nothing executed). Three spot-checked in source by the lead: (1), (3), (5). Everything outside the typed exception map falls to the catch-all handler and answers 500 internal_error.\n1. A step alias with more digits than Python converts ({{step_999...}} with 4301+ digits) raises ValueError at int(raw) in variable_resolver.runtime_step_alias_order (second site flow_validators_template.py:126); the sibling input_binding_contract_rules.source_ref_step_order already catches it. A stored prompt with such an alias makes the flow un-savable.\n2. Classification preview with malformed input_bindings.source_refs raises InputBindingContractError (a ValueError): the preview skips the graph validator that answers a typed 400 on save (step_lineage.py:130 -> input_binding_contract_rules.py:435).\n3. care_data_policy.approval_mode or pre_approval_visibility sent as a list or object raises TypeError (value in frozenset, flow_metadata.py:537).\n4. A form-field label that is not a string raises a pydantic ValidationError inside the service (FlowFormField.model_validate, flow_metadata.py:573).\n5. A lone surrogate in input_payload_json raises UnicodeEncodeError in FlowRunService._build_idempotency_fingerprint (json.dumps(..., ensure_ascii=False).encode('utf-8'), flow_run_service.py:872) and in flow_run_payload_validation.py:37-44. Reachable from a browser in principle (a JS string may hold half a surrogate pair); not reproduced.\n6. Integers beyond the Postgres integer/bigint range in body, path and query fields (timeout_seconds, output_classification_override, expected_revision, attempt_no, after_revision, offset). Not run against asyncpg.\n7. One review Idempotency-Key reused for two checkpoints of the same run violates uq_flow_run_review_checkpoint_resume_key (API clients only; the web UI derives the key from the checkpoint id).\n8. Flow name has no length or character bound on REST create/update; an over-long or NUL-containing name is rejected by Postgres. normalize_flow_name is not a drop-in: it also rewrites names.\nEach has route-to-raise path, triggering JSON, fix at the existing owner and a red-first test sketch in demo-stack/specs/flows-quality/reviews/robustness-batch-20261012/sweep-api-unhandled-input.md. All are API-client or hostile-input paths except possibly (5); low user value each, cheap as one typed-refusal slice with unit tests.",
+  "validation": {
+   "id": "eneo-9s1m",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "FIXED: (1) variable_resolver.py:51-61 decimal_number, used at flow_validators_template.py:122; (3) flow_metadata.py:534-546 isinstance(str) guard; (4) flow_metadata.py:566,668-676 _require_text_label. STILL OPEN: (2) step_lineage.py:134 effective_question_binding raises InputBindingContractError (probe at tip: resolve_step_input_orders with source_refs='bad' raises it, a ValueError), reached from flow_security_classification.py:501 via application/flow_service.py:905 preview with no catch in api/flow_security_classification_router.py; (5) application/flow_run_service.py:872-877 and flow_run_payload_validation.py:37-44 encode('utf-8') on json.dumps(ensure_ascii=False), probe gives UnicodeEncodeError for a lone surrogate; (6) flow_models.py:700-708 timeout_seconds only >0, no upper int bound; (7) tables/flow_tables.py:1797-1803 unique (tenant_id, flow_run_id, resume_idempotency_key) with no IntegrityError handling in infrastructure/flow_run_review_checkpoint_repo.py; (8) flow_models.py:753,785 name: str, flow table name TEXT, normalize_flow_name only used in authoring paths",
+   "note": "3 of 8 sub-items fixed ((1),(3),(4)); (2),(5),(6),(7),(8) still present at tip (7 and 8 and 6 source-read only, not run against Postgres; 5 confirmed by Python probe of the encode). All hostile-input or API-client 500s; valid as one typed-refusal slice but the bead should be rewritten to the five remaining items."
+  }
+ },
+ {
+  "id": "eneo-9z7",
+  "title": "Flow run evidence view: show each checkpoint's change history per step (records exist in the export and the history endpoints)",
+  "priority": 3,
+  "status": "open",
+  "description": "Follow-up from eneo-pqy (landed 9340dc05f). The run evidence VIEW carries only the checkpoint summary flags (any_edited, any_corrections_edited); the per-change records are in the evidence export (review_checkpoints[].edits, transcript_correction_revisions) and behind GET .../review-checkpoints/{id}/edits and GET .../transcript-corrections/{step_id}/revisions. The active-checkpoint review panel shows the history; a finished run's evidence view does not yet. Design: the evidence summary needs the checkpoint ids per step (or the step card calls the edits endpoint for the step's checkpoint), then reuse the panel's history list component. Also consider a length limit for correction replacement text (flow_models.py ~2570 has none; the history page 413 handles the oversized case but a bound at input is cheaper).",
+  "validation": {
+   "id": "eneo-9z7",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (small feature; the input-bound part is optional)",
+   "evidence": "FlowRunEvidence.svelte only lists section names (:477-480); reviewCheckpoints.edits is called only in FlowRunReviewCheckpointPanel.svelte:261; any_edited/any_corrections_edited exist only in backend export summary (flow_run_evidence_export_summary.py:125-126); TranscriptCorrectionOccurrencePublic.corrected (api/flow_models.py:3013) has no max_length",
+   "note": "A finished run's evidence view still has no per-step change history; the history UI is only in the active checkpoint panel. Replacement text 'corrected' is still unbounded at input (the 2000-occurrence list cap exists). Genuine traceability gap for evidence."
+  }
+ },
+ {
+  "id": "eneo-be0p",
+  "title": "Flows backend maintainability before production",
+  "priority": 1,
+  "status": "in_progress",
+  "description": "Phase 0 coordination/exclusions and serialized mutation guard; read-only MAP v1; one Claude-reviewed packet of evidence-ranked candidates/tranche 1/owner decisions. Backend/database/model first. No product lane until cleanup and gallring agree ownership. Behaviour-preserving slices land only through land_queue on feature/flows-and-builder with suite, strict pyright, mapped mutation, schema and OpenAPI evidence.",
+  "validation": {
+   "id": "eneo-be0p",
+   "scope": "flows_core",
+   "state": "stale_or_obsolete",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "P2: an umbrella tracker whose children carry the work; lower from P1",
+   "evidence": "brt show eneo-be0p: Rollup open (12 closed, 4 deferred, 2 open); eneo-be0p.1 (FQ1) and .2 (FQ2) CLOSED; backend/src/eneo/flows/domain/flow_webhook_delivery.py exists at tip",
+   "note": "The epic's notes (2026-10-06: guard run and land_queue batch pending, goal active) describe a state that has passed; FQ1/FQ2 landed and most children are closed. Keep only as a container for the remaining 2 open children and close it when they are done or deferred."
+  }
+ },
+ {
+  "id": "eneo-be0p.17",
+  "title": "Flows: the runtime parser has its own copy of the source_refs check and its error translation",
+  "priority": 3,
+  "status": "open",
+  "description": "runtime/step_definition_parser.py:405-421 re-implements the two-step input_bindings check (unsupported key, unreadable source_refs) with its own BadRequestException, beside flows/flow_validators.py (_validate_supported_input_binding_keys, refuse_unreadable_source_refs). Gate preview-source-refs it1 (GREEN, P3) and its adversary both noted it: a future change of one error contract would diverge. Reuse the validators' conversion in the parser, with a test that a published definition with unreadable source_refs gets the same refusal as a save.",
+  "validation": {
+   "id": "eneo-be0p.17",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (small, cheap)",
+   "evidence": "backend/src/eneo/flows/runtime/step_definition_parser.py:409-424 vs backend/src/eneo/flows/flow_validators.py:1108-1125; shared owner input_binding_contract_rules.py:470 validate_source_refs_binding and :474 unsupported_input_binding_key",
+   "note": "Both copies of the unsupported-key check and the InputBindingContractError -> typed refusal translation still exist. The helper named in the bead (refuse_unreadable_source_refs) does not exist; the two sites differ in exception type (BadRequestException vs FlowStepValidationError with a step_order prefix), so reuse means extracting a shared translator, not a drop-in. Both call the same detection functions, so only the error contract could diverge."
+  }
+ },
+ {
+  "id": "eneo-be0p.18",
+  "title": "Flows: an http_get step with output mode template_fill is legal and its fetch is never made",
+  "priority": 2,
+  "status": "open",
+  "description": "Found 2026-10-12 by the pre-gate adversary of the flow tool-input stack (demo-stack/specs/gate-out/adv-flows-tool-definition-b7e924043.md, P1-1, \"Outside these commits\").\n\nA step with input_source http_get and output_mode template_fill is a legal cell of the capability manifest and passes save and publish (no rule in flow_validators_http.validate_http_input_config or in flow_capability_manifest._source_type_illegality). At run time the template-fill handler (runtime/step_handlers/template_fill.py) builds its result from output_config.bindings through template_fill_runtime._resolve_template_bindings and never calls resolve_step_input, so the HTTP GET the step declares is never made. The step completes and its result records input_source http_get.\n\nThe tool input source refuses the same combination since the tool stack: domain/tool_input_validation.validate_tool_input_config and flow_capability_manifest._cell_illegality both read output_modes.OUTPUT_MODES_WITHOUT_STEP_INPUT (today: template_fill). The http_get source was left as it is because the change alters which saved flows publish.\n\nProposed: the same rule for http_get through the same constant (validator and manifest), with a look at saved flows that hold the combination first; FCM_VERSION and the manifest counts follow.\n",
+  "validation": {
+   "id": "eneo-be0p.18",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P2",
+   "evidence": "flows/flow_capability_manifest.py:924-932 (OUTPUT_MODES_WITHOUT_STEP_INPUT refused only for FlowInputSource.TOOL); domain/tool_input_validation.py:36; flows/output_modes.py:11; no output_mode check in flow_validators_http.py",
+   "note": "http_get + template_fill is still a legal cell, so the declared GET is silently never made. Fix is to apply the existing constant for HTTP_GET in validator and manifest, with the bead's check of saved flows and FCM_VERSION bump first."
+  }
+ },
+ {
+  "id": "eneo-birw",
+  "title": "Word template e2e: assert the filled document content, not only ZIP magic and filename",
+  "priority": 3,
+  "status": "open",
+  "description": "Follow-up from the sync-v1 gate (gpt-6.1-sol, 2026-09-30, P3): frontend/apps/web/tests/flow-word-template-authoring.spec.ts:343 checks ZIP magic, completion, filename and step results; an untouched template would pass. Inspect the downloaded word/document.xml and assert the mapped text appears at the intended placeholder location (and the placeholder itself is gone).",
+  "validation": {
+   "id": "eneo-birw",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "test_debt",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "frontend/apps/web/tests/flow-word-template-authoring.spec.ts:594-663 (esp. :648 hex 504b0304 check, no word/document.xml inspection)",
+   "note": "The e2e 'browser-mapped template produces a downloadable Word document' still asserts only the ZIP magic, .docx name, status completed and the step result containing MOCK_REPLY; an unfilled template would pass. Nothing in the file reads document.xml. A real assertion gap on the one output the feature exists to produce."
+  }
+ },
+ {
+  "id": "eneo-cb1j",
+  "title": "Flows: idle webhook delivery cadence is ~60 s with the singleton arq cron (was 30 s)",
+  "priority": 3,
+  "status": "open",
+  "description": "Quality A2 (lane qa2-webhook-budget) made the webhook outbox cron a singleton: a fixed arq job_id plus keep_result=0, with worker keep_result=0. arq 0.28 keeps a finished cron job's in-progress marker for 60 s (keep_cronjob_progress, constants.py:12; worker.py:540/698), so an idle webhook job starts about every 60 s instead of every 30 s; a newly due delivery can wait up to ~60 s. This is documented in docs/runbooks/flows.md and inside the 300 s backlog grace. If latency matters: keep a short per-tick cron that enqueues a REGULAR function with _job_id=FLOW_DELIVER_WEBHOOK_OUTBOX_TASK. Regular functions delete their in-progress key on finish (worker.py:695-696), and enqueue_job still refuses a duplicate while the job key exists. Decide with the owner.",
+  "validation": {
+   "id": "eneo-cb1j",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "P3 ok, but it is a decided trade-off, not a defect; close or keep as decision",
+   "evidence": "worker/platform_tasks.py:118-124 (job_id fixed, keep_result=0); arq constants.py:12 keep_cronjob_progress=60 and worker.py:540 confirm the 60 s marker; documented in docs/runbooks/flows.md:80-84",
+   "note": "Claim is accurate (idle cadence about 60 s, up to ~60 s added delivery latency) and already documented inside the 300 s grace. No measured need for 30 s; the proposed alternative adds a second mechanism. Owner decision, no quality gain until latency matters."
+  }
+ },
+ {
+  "id": "eneo-cls",
+  "title": "Run evidence: every rag status emitter must use the declared RagRetrievalStatus",
+  "priority": 2,
+  "status": "open",
+  "description": "RagProvenance (flow_run_provenance.py:476) is extra=allow with no declared fields, so nothing enforces that the rag block's status is a member of RagRetrievalStatus (rag_retrieval.py:31-40). step_handlers/speaker_mapping.py:71 emits a bare status 'skipped' that is not in the enum and reaches the run evidence UI, found by Astra during the labelling gate on 2026-09-14 and reproduced locally. The frontend now labels it, but the next handler can invent another word and leak it to municipal users again. Fix at the owner: give the speaker-mapping skip a typed member (or reuse one), and validate the status at the provenance boundary so an unknown value fails loudly in tests instead of silently in the UI. Prerelease, so no compat for rows already written.",
+  "validation": {
+   "id": "eneo-cls",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "P3 (small typed fix; the UI already labels it)",
+   "evidence": "flows/runtime/step_handlers/speaker_mapping.py:83 (RagRetrievalRecord(status='skipped', reason='speaker_mapping')); flows/domain/rag_evidence.py:78-86 (RagRetrievalStatus has no 'skipped'), :461 (status: RagRetrievalStatus | Literal['skipped']), :484-490 (special-case bare shape); flow_run_provenance.py:506-507 (RagProvenance extra='allow', no fields)",
+   "note": "Emitters now go through the typed RagRetrievalRecord, so a new handler cannot invent a string unnoticed. But 'skipped' is still a second, off-enum status written to the persisted rag block, and RagProvenance still validates nothing. The suggested fix (a typed enum member plus boundary validation) is still open."
+  }
+ },
+ {
+  "id": "eneo-e4al.5",
+  "title": "flows tests: bound the remaining event-wait syncs (audio spool, heartbeat, step execution) + a guard for the class",
+  "priority": 3,
+  "status": "open",
+  "description": "Unbounded 'await <event>.wait()' test syncs hang instead of failing when the code under test ends early (found via mutation guard m180/m206, fixed for the read tests in 5356a5df5 with tests/unittests/flows/async_test_support.py until_task_reaches). Remaining: test_audio_spool.py:241,331; test_flow_execution_heartbeat.py:66,90,128; test_step_execution_runtime.py:2808 (check each is a sync on code-under-test progress, not a fake's release). Add a cheap guard (e.g. a test or lint that forbids a bare top-level await <event>.wait() in tests/unittests/flows). P3 from adv-testbound-r1: raise the helper's AssertionError from task.exception().",
+  "validation": {
+   "id": "eneo-e4al.5",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "test_debt",
+   "real_improvement": true,
+   "priority_ok": "keep P3; low value, tests hang only when the code under test fails",
+   "evidence": "backend/tests/unittests/flows/test_audio_spool.py:241,331 and test_flow_execution_heartbeat.py:66,90,128 (bare 'await started.wait()'); test_step_execution_runtime.py:2808 (release.wait() inside a fake, so not a sync on code progress and probably to be left); async_test_support.py until_task_reaches exists; no guard in test_flow_architecture_guards.py",
+   "note": "The helper exists and only 3 test files still use bare waits. Line 2808 is a fake's release, so it needs no change. The guard (AST check for a bare top-level await <event>.wait() in tests/unittests/flows) does not exist. Note there are also 77 .wait() uses in total, so the guard needs an allowlist for fakes and for asyncio.timeout."
+  }
+ },
+ {
+  "id": "eneo-eaar.11",
+  "title": "Builder: publish implies parse parity and safe plan hydration (architecture item 4 S0/S0b)",
+  "priority": 3,
+  "status": "open",
+  "description": "Plan v2 backlog. Fold the per-source rule into flow_validators with a code so publish gives 400, a publish-implies-parse parity test, and degrade on plan hydration of an older stored plan. Check first what later runtime commits already solve.",
+  "validation": {
+   "id": "eneo-eaar.11",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (paused by owner; publish 500 is a real defect but narrow: API client / package import per-source steps)",
+   "evidence": "flows/runtime/step_definition_parser.py:696-706 raises BadRequestException for per_source without runtime-managed fields; flows/flow_validators.py has no such check (only :2581-2583 max_files); flows/application/flow_service.py:1344-1362 wraps it in FlowPublishedDefinitionInvalidError (flows/domain/flow_invariant_exceptions.py:17), handled only by the generic Exception handler server/main.py:653; ai_builder/ai_builder_plan_lifecycle.py:945-953 _get_plan re-raises ValidationError unless it is the MCP plan case; no publish-implies-parse parity test found (rg parity/implies_parse: none)",
+   "note": "Both halves still open at the tip: a per-source step lacking the source_label/source_file_id/extraction_warnings contract passes validators and ends publish as an uncoded 500, and plan hydration of an older stored plan has no degrade path. Bead says to check later runtime commits first: I found none that cover it."
+  }
+ },
+ {
+  "id": "eneo-eaar.9",
+  "title": "Run history page: one unreadable published version aborts the whole page",
+  "priority": 3,
+  "status": "open",
+  "description": "gpt-6.1-sol review (builder-arch-20261020/review-sol-it1.md): flow_run_service.py:1104 parses every version without local degradation. Error propagation true; how many stored versions are affected is unproven. Start with a mixed old/current version case.",
+  "validation": {
+   "id": "eneo-eaar.9",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (affected-version count unproven; a mixed old/current red test comes first)",
+   "evidence": "flows/application/flow_run_service.py:1085-1118 _final_outputs_for_runs: parse_verified_published_definition and the no-executable-steps raise sit in a plain for loop with no per-version try/except",
+   "note": "Error propagation is real: one unreadable or checksum-mismatched version raises and aborts the whole history page. Whether any stored version is actually affected stays UNKNOWN."
+  }
+ },
+ {
+  "id": "eneo-epim",
+  "title": "MCP tools in Flows, release 1: a flow step calls one read tool (design v2.1, awaiting owner decisions)",
+  "priority": 2,
+  "status": "open",
+  "description": "Owner request 2026-10-12. Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1; v1 kept beside it), fact maps flow-mcp-facts-{a-assistants,b-removed-surface,c-flow-machinery}.md. Reviewed: gpt-6.1-sol max (MIN 6) and gpt-6-astra max (MIN 5) on v1, gpt-6.1-sol high follow-up on v2 (MIN 7, scope kept, six corrections folded into v2.1); plan review budget used. Release 1 = one declared read tool per step with typed whole-argument bindings, answer contract, publish pin, live checks, classification, evidence. Model-chosen tools and writes are later releases (design section 8). NOTHING is built and no slice bead exists yet: slices are created after the owner's decisions 11.1 to 11.5 (scope; explicit space grants with migration; two chat behaviour changes; private networks for admin-registered servers; go-ahead for three slices outside the Flows folder) and after the SEAB facts (real tool schemas, database account rights, sample answers and sizes, partial answers). Needs: bead eneo-plsj slice S0 (egress move) before the tool call; bead eneo-iysu (flag loss in the shared projection). Slice 4 of the design (deterministic pass-on of structured input as JSON output, also useful for the HTTP input) needs no decision and can be planned first. Replaces ADR decision 4 in docs/adr/flow-launch-scope-and-lifecycle.md once decided.",
+  "validation": {
+   "id": "eneo-epim",
+   "scope": "other",
+   "state": "partly_true",
+   "category": "maintainability",
+   "real_improvement": false,
+   "priority_ok": "keep P2 as tracker; fix stale title and description ('NOTHING is built', 'awaiting owner decisions')",
+   "evidence": "bead Rollup: 19 closed, 2 in_progress, 41 open; backend/src/eneo/flows/runtime/tool_input.py, mcp_servers/application/unattended_tool_call.py, frontend/apps/web/src/lib/features/flows/components/tool/ToolConfigPanel.svelte, docs flows.mdx:150-161 all exist at tip",
+   "note": "Epic container. Its text says nothing is built and owner decisions are pending, but release 1 (tool step runtime, publish pin, picker, docs, destination policy) is largely in the tip; the children carry the remaining work. Not an actionable defect itself."
+  }
+ },
+ {
+  "id": "eneo-epim.1",
+  "title": "Flow MCP S0: revised ADR decision 4 (read tools allowed under the chain; writes and model tools deferred with named contracts)",
+  "priority": 1,
+  "status": "open",
+  "description": "Docs only: docs/adr/flow-launch-scope-and-lifecycle.md decision 4 and the places that restate it (docs/ARCHITECTURE.md). The text must stay literally true while the code still refuses MCP in flows: say what is decided and that the refusal stays until the slices land. Section 9 slice 0. Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1, decided by the owner 2026-10-12).",
+  "validation": {
+   "id": "eneo-epim.1",
+   "scope": "flows_docs_ci",
+   "state": "already_fixed",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "close; no work left",
+   "evidence": "docs/adr/flow-launch-scope-and-lifecycle.md:299-330 (decision 4 with Revision 2026-10-12: read tools allowed through the assistants' chain) and docs/ARCHITECTURE.md:262-281 (Flow external-effect boundary rewritten)",
+   "note": "ADR decision 4 and the ARCHITECTURE restatement already carry the owner's 2026-10-12 revision, including what is still unsupported. The bead's premise (refusal still in code, text must stay literally true until slices land) is obsolete: tool steps exist in the code."
+  }
+ },
+ {
+  "id": "eneo-epim.11",
+  "title": "Flow MCP: What's new entry and docs for the MCP behaviour changes",
+  "priority": 2,
+  "status": "open",
+  "description": "User-facing changes that need ONE What's new entry in frontend/packages/whats-new/releases.json (follow its PLAYBOOK.md; the file is on the Gallring list, ACK needed) and the guide of piece F: (1) a new shared space starts with no MCP server until its admin activates one (78b825394); (2) a server a space admin removed is not called by a new chat turn (199595913); (3) tools removed at the server or never approved are not offered (2f51b7ac2); (4) the tick 'May be used in flows' per tool, cleared when the server's address or authentication type changes; (5) a flow step can call one read tool. Checked 2026-10-12 on 9a4210657: no docs page states the old behaviour of (1) to (3) (grep of frontend/apps/docs-site/src/content/docs for new-space auto-fill and removal: none), so no page is false meanwhile. Lands in the same PR line (feature/flows-and-builder) before it merges.",
+  "validation": {
+   "id": "eneo-epim.11",
+   "scope": "flows_docs_ci",
+   "state": "partly_true",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "P3: release-note text, no defect; it is the PR A '## User-facing' section, releases.json is drafted at release time per PLAYBOOK",
+   "evidence": "backend/src/eneo/spaces/space_service.py:248 (new shared space has no general MCP server); frontend/apps/docs-site/src/content/docs/flows.mdx:150,159 (tool step documented); frontend/packages/whats-new/releases.json has no MCP entry",
+   "note": "Behaviours (1)-(3) and (5) are in code and the flow tool step is documented; point (4) was voided by the owner. What remains is writing the PR '## User-facing' text and checking each sentence, not a code or docs defect. Docs page for MCP (knowledge-retrieval-and-mcp.mdx) does not state the old behaviour, so nothing is false meanwhile."
+  }
+ },
+ {
+  "id": "eneo-epim.15",
+  "title": "Flow MCP: the typed tool-call record on the attempt (design 5.8); an interrupted HTTP or tool read writes no audit row",
+  "priority": 2,
+  "status": "open",
+  "description": "Design demo-stack/specs/flows-quality/plans/flow-mcp-design.md, sections 4.6 and 5.8: \"A typed tool-call record on the step attempt, complete and size-bounded: server, tool, the two fingerprints, the resolved arguments, outcome, duration, answer size and hash. It is written with the attempt whether the step then succeeds or fails, and records an interrupted call as interrupted.\"\n\nNot built by the tool-input stack (pre-gate adversary adv-flows-tool-run-938092428.md, P2-2 and P2-5). What exists (flows/runtime/tool_input.py):\n- a successful read returns the argument edges and one resolved-input edge of kind tool_answer;\n- a read that fails with a typed code after it reached out writes one FLOW_HTTP_OUTBOUND_CALL audit row (no arguments) and no edge, so nothing records what was sent;\n- a read that is cancelled (the task is cancelled, the worker lost the run) or fails with an untyped exception writes no audit row at all. The HTTP input read has the same gap (runtime/http_orchestration.py).\n\nWanted: the typed record on the attempt for every call that went out, failed and interrupted calls included, covered by the debug-evidence redaction and the run purge; and one audit row per call for the interrupted case, for the tool read and the HTTP read alike.\n",
+  "validation": {
+   "id": "eneo-epim.15",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "robustness",
+   "real_improvement": false,
+   "priority_ok": "Close; any remaining gap is the HTTP-read tool-call record, which the design never required.",
+   "evidence": "flows/domain/flow_step_attempt_input.py:88-175 (FlowStepAttemptToolCallStart/Result, state in_progress/interrupted/answered/failed); flows/runtime/tool_input.py:144-156,283-356 (RecordToolCallFn; CancelledError/untyped errors audited via unfinished_call_message); flows/runtime/http_orchestration.py:231-286 (every ending after send is audited, including CancelledError)",
+   "note": "The typed tool-call record on the attempt exists, with interrupted state, and interrupted tool and HTTP reads now write an audit row with fixed text. Redaction and purge coverage of the new record was not verified by me (UNKNOWN)."
+  }
+ },
+ {
+  "id": "eneo-epim.16",
+  "title": "Flows: patternProperties NAMES matched by additionalProperties/unevaluatedProperties have no time limit",
+  "priority": 3,
+  "status": "open",
+  "description": "Narrowed 2026-10-13 by the read commit of the flow tool-input stack (gate flows-tool-read round 1 F2): output_processing.build_schema_validator now evaluates 'pattern' and 'patternProperties' with the regex package under one shared deadline per validation (SCHEMA_PATTERN_BUDGET_SECONDS = 1.0), and the tool argument check runs off the event loop. LEFT: jsonschema matches the names of patternProperties with Python's backtracking re inside additionalProperties (jsonschema/_utils.py:82) and unevaluatedProperties (_utils.py:317, _legacy_keywords.py:383). A schema combining patternProperties with one of those keywords has no time limit on those name matches (the names come from the data). Closing it means owning those two keyword implementations (~150 lines of jsonschema internals) or a different evaluation engine. Original finding: adv-flows-tool-run-938092428.md P2-6.",
+  "validation": {
+   "id": "eneo-epim.16",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "security",
+   "real_improvement": false,
+   "priority_ok": "close (already fixed); P3 no longer applies",
+   "evidence": "backend/src/eneo/flows/runtime/tool_argument_check.py:1-30 (killable child with deadline for tool args and step input/output contract checks); runtime/contract_check.py:5,18; domain/schema_engine.py:1-6; rg for SCHEMA_PATTERN_BUDGET_SECONDS and the regex package finds nothing at tip",
+   "note": "The bead's premise (regex package + shared deadline inside build_schema_validator, with only the jsonschema internals left unbounded) no longer exists. Tip bounds ALL schema matching, patternProperties names under additionalProperties/unevaluatedProperties included, by running the check in a killable child process with a time limit. The remaining gap in the bead is covered by that mechanism. Only in-process callers still unbounded: ai_builder_tools.py:412 and output_processing.py:904 compile validators; worth one grep if closing, but the bead's specific claim is obsolete."
+  }
+ },
+ {
+  "id": "eneo-epim.21",
+  "title": "Flows: publish does not check a tool step's required and fixed arguments against the approved schema",
+  "priority": 2,
+  "status": "open",
+  "description": "Release 1 checks a tool step's arguments against the tool's approved input schema only at run time (typed_io_tool_invalid_arguments). A flow with a missing required argument, or a fixed value of the wrong type, can be published through the API and then fails at every run. The web editor now raises a client issue for a missing required argument and refuses a decimal for an integer (web commit 'an author chooses an MCP tool and binds its arguments'), but the server is the owner. What publish can know: the names in the schema's required list are present (fixed or bound), and each FIXED value validates against its property's schema; bound values are known only at run. Needs a design for schemas with $ref/anyOf at the property. Found 2026-10-13 while building the step editor.",
+  "validation": {
+   "id": "eneo-epim.21",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "bug",
+   "real_improvement": false,
+   "priority_ok": "Close.",
+   "evidence": "backend/src/eneo/flows/application/flow_tool_publication.py:166-297 (pin_tool_steps / check_tool_configuration: refuses a missing required argument at :266, undeclared arguments at :273, and fixed values via check_fixed_tool_properties at :284; schema-validity check at :261)",
+   "note": "Publish now checks required arguments and fixed values against the approved input schema, with an unevaluable-schema refusal (refuse_unknown_dialect/refuse_unevaluable_contract) covering the $ref/anyOf concern. The bead's premise (run-time-only check) is false at this tip."
+  }
+ },
+ {
+  "id": "eneo-epim.22",
+  "title": "Flows step editor: show the tool server's security class and what may be sent",
+  "priority": 3,
+  "status": "open",
+  "description": "Owner rule 2026-10-13 (log 09:29Z): a flow may call a tool on an MCP server below the space's class but may send no run data (only fixed values). Today the editor learns this only from the save refusal flow_step_tool_arguments_classification_write_down (cause space/reads). Follow-up: GET /flows/{id}/tool-options carries the server's classification level (deliberately left out in fcaf0e5c2), and the argument row says before save which bindings the server may receive. Make right easy, wrong hard.",
+  "validation": {
+   "id": "eneo-epim.22",
+   "scope": "flows_web",
+   "state": "already_fixed",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "close",
+   "evidence": "commit fdb1dd975 'the step editor shows a tool server's classification and what it may receive'; backend flows/application/flow_tool_options.py:41,64 and flows/api/flow_tool_options_models.py:50 (mcp_server_security_level in tool-options); web .../components/tool/ToolConfigPanel.svelte:76,245-258 (flow_tool_server_class and flow_tool_server_class_rule shown)",
+   "note": "tool-options now carries the server's classification and the editor shows it with the rule. The text sits in the tool row, not on each argument row, which is a minor wording gap, not the defect the bead describes."
+  }
+ },
+ {
+  "id": "eneo-epim.25",
+  "title": "Flows: refuse provable type mismatches between a bound variable and a tool argument at publish; the picker shows the expected type",
+  "priority": 1,
+  "status": "open",
+  "description": "Walkthrough B4 and review finding 2: a text variable bound to an array argument publishes and fails only at run time after earlier steps ran. Refuse only provable conflicts (known output type vs argument JSON type), show 'unknown type' otherwise; no schema-equivalence engine. Picker receives the expected argument type (ToolArgumentRow.svelte:241). Generic for any tool. Source: GPT-6.1-sol UX review 2026-10-15 (demo-stack/specs/flows-mcp-tools/ux-review-sol, artifact codex-peer-loop-mcp-tools-in-flows-ux-dx-ui-review-20261015T124408Z). Before release-1 pilot.",
+  "validation": {
+   "id": "eneo-epim.25",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "keep P1 (before release-1 MCP pilot; prevents run-time failure after earlier steps ran)",
+   "evidence": "backend/src/eneo/flows/flow_validators.py:1198-1197 (WholeReferenceValue carries only reference+scalar, no JSON type), :1378-1393 (publish check only says whether a bound argument names a value); ToolArgumentRow.svelte:274-280 passes variableContext without an expected type to the picker",
+   "note": "Publish refuses unknown references but never a known output type vs the argument's JSON type; the picker gets no expected type. Run-time rejection (typed_io_tool_invalid_arguments, flow_run_error.py) is the only catch. The cited ToolArgumentRow.svelte:241 anchor has moved (~:274)."
+  }
+ },
+ {
+  "id": "eneo-epim.26",
+  "title": "Flows tool editor: show argument constraints from the approved schema (items, format, min/max, default as information)",
+  "priority": 2,
+  "status": "open",
+  "description": "Review finding 6: toolInputSchema.ts:104 keeps type/enum/description but drops items, format, bounds and default. Show them per argument row and use schema-shaped examples; a default is shown as information or an explicit choice, never assumed to be applied by the server. Source: GPT-6.1-sol UX review 2026-10-15 (demo-stack/specs/flows-mcp-tools/ux-review-sol, artifact codex-peer-loop-mcp-tools-in-flows-ux-dx-ui-review-20261015T124408Z).",
+  "validation": {
+   "id": "eneo-epim.26",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "P3 (UX improvement, no correctness impact; run-time schema check is the safety net)",
+   "evidence": "frontend/apps/web/src/lib/features/flows/components/tool/toolInputSchema.ts:12-61 and :88-125 (controlFor/readToolArgumentForm read only type, enum, description, required; no items/format/minimum/maximum/default); grep for minimum/maximum in components/tool returns nothing",
+   "note": "Argument constraints are still dropped by the editor. It is a small, self-contained UI gain that helps authors avoid run-time typed_io_tool_invalid_arguments; the bead's rule (default shown as information, never assumed applied) is sensible."
+  }
+ },
+ {
+  "id": "eneo-epim.27",
+  "title": "Flows tool editor: show what the tool declares it returns (output schema/structured answer) or 'answer type unknown'; mark example-based contracts as the author's",
+  "priority": 2,
+  "status": "open",
+  "description": "Review finding 7: the author picks text/JSON without seeing what the tool declares; the tool list contract carries only the input schema (flows-api-guide.mdx:229). Show the approved output shape when the catalog has it, else 'Svarstyp okänd'; no automatic test call on selection. Source: GPT-6.1-sol UX review 2026-10-15 (demo-stack/specs/flows-mcp-tools/ux-review-sol, artifact codex-peer-loop-mcp-tools-in-flows-ux-dx-ui-review-20261015T124408Z).",
+  "validation": {
+   "id": "eneo-epim.27",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "P3 (UX nicety; needs a backend catalog change to store outputSchema first)",
+   "evidence": "flows/api/flow_tool_options_models.py:72-79 (only input_schema is exposed); no outputSchema in backend/src/eneo/mcp_servers (grep of output_schema/outputSchema finds only flow-output code in flows/ai_builder)",
+   "note": "The tool-options contract carries no output schema and the MCP tool store does not keep outputSchema, so the editor has nothing to show. It is a feature spanning catalog storage and UI, not a defect; value is speculative until the author-facing need is measured."
+  }
+ },
+ {
+  "id": "eneo-epim.28",
+  "title": "Flows editor: underlag bindings (flowInputBindings) offer fields whose names cannot be a variable token; the picker shows no type for a [\"string\",\"null\"] field",
+  "priority": 3,
+  "status": "open",
+  "description": "Found while building 'contract from an example answer' (d02a1c1cc): the variable picker now omits names failing isVariablePathSegment, but flowInputBindings still offers them; union types with null get no type label. Apply the same rule owner and the picker's type labels.",
+  "validation": {
+   "id": "eneo-epim.28",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "web .../flowInputBindings.ts:201-212 (every output_contract property offered as a structured source, no isVariablePathSegment filter; schemaType = stringValue(schema.type), null for a type array); components/VariablePicker.svelte:101-109 (the picker filters with isVariablePathSegment and uses readJsonSchemaType); flowVariableTokens.ts:39",
+   "note": "The two readers of output_contract properties still disagree. Both the unusable-name filter and the type label for ['string','null'] are missing in flowInputBindings. A real mismatch with a one-owner fix."
+  }
+ },
+ {
+  "id": "eneo-epim.29",
+  "title": "Flow graph follow-ups: keyboard binding-row highlight, edges leading nodes during glide, step-card height assumption, dark-theme contrast",
+  "priority": 3,
+  "status": "open",
+  "description": "From the graph slice (87d688ed8, adversary adv-mcp-flow-graph-f72178763), see worktrees/mcp-flow-graph/.lane/followups.md: keyboard equivalent of the binding-row highlight on edge hover; node transforms glide 200 ms while edges redraw at once; lane line assumes step cards <= 140 px; dark-theme contrast of dimmed nodes/labels unmeasured; surviving mutants M17/T7/S6.",
+  "validation": {
+   "id": "eneo-epim.29",
+   "scope": "flows_web",
+   "state": "partly_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P3; the raw-token item is the one users see",
+   "evidence": "web .../components/FlowGraph.svelte:187-190,1153 (nodes glide 200ms; edges are not delayed); flowGraphPlan.ts:83 (step box height 140 assumed); flowGraphToolNode.ts:23-27 ('reference' arguments shown as written, so the token such as {{flow_input.text}} is raw)",
+   "note": "Glide/edge mismatch, the 140 px assumption and the raw token display are still present. Keyboard equivalent of the edge highlight and the dark-theme contrast are visual and need a run to judge (unverifiable here). Several small independent items; the owner comment about naming the flow-input binding in words is a concrete UX defect."
+  }
+ },
+ {
+  "id": "eneo-epim.3",
+  "title": "Flow MCP S2a: one typed MCP grant decision over complete catalog facts; projection consumes it; removed server stops at run time; space audit",
+  "priority": 2,
+  "status": "in_progress",
+  "description": "Outside the Flows folder; changes chat (owner 'Ja, bada'). Fixes bead eneo-iysu (the projection drops requires_approval and removed_from_remote). Decision returns allowed or the first refusing level. A server removed from a space stops for assistants there at run time. Space-level MCP changes audited. Proofs: design section 10 first bullet. Gate xhigh. Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1, decided by the owner 2026-10-12).",
+  "validation": {
+   "id": "eneo-epim.3",
+   "scope": "other",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "keep P2, narrow to the unlanded parts",
+   "evidence": "landed: backend/src/eneo/mcp_servers/domain/tool_switch.py:20, spaces/space_repo.py:768,792-793 (projection keeps requires_approval, removed_from_remote), mcp_servers/application/unattended_tool_use.py, domain/unattended_tool_refusal.py, infrastructure/repo_impl/unattended_tool_facts_reader.py, tests/integration/mcp_servers/test_unattended_tool_facts_reader.py, capability_resolver.py:167,204 in_space, space_service.py:248 new space starts empty. Not found: any audit of space-level MCP changes (spaces/space_service.py has no audit; only space_router.py audits space create/update)",
+   "note": "One typed grant decision, the projection fix (eneo-iysu), run-time stop for a removed server, the reader with its integration test and empty-by-default new spaces are in the tip. The 'space-level MCP changes audited' proof was not found; verify that part and the follow-ups (help-assistant runner space check, picker showing a removed tool) before closing."
+  }
+ },
+ {
+  "id": "eneo-epim.30",
+  "title": "Flows tool editor follow-ups: precise description search, preview of an unlisted tool's call, draft kept when its tool leaves the list",
+  "priority": 3,
+  "status": "open",
+  "description": "From adversary adv-mcp-tool-editor-6916e4354: description search is fuzzy and noisy ('stat' matches close_case) — use word/substring matching on descriptions; 'Visa det AI:n får' has no tool-call section when the tool is not in the loaded list; a draft is hidden while its tool is not listed; 'place' passed separately from draft.scope. Surviving test mutants M8, M9b, M13c, M13d, M28, M29.",
+  "validation": {
+   "id": "eneo-epim.30",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "web .../components/tool/ToolPicker.svelte:82-96 (computeCommandScore over tool_description keywords, so fuzzy); ToolConfigPanel.svelte:72,163,199 (selected from options only, an unlisted tool has no config view); ToolConfigPanel.svelte:98-101 (draftPlace(scope) passed beside typedDraft(text, scope, config)); FlowStepRequestPreview.svelte:131-137 (tool section only when tool is set)",
+   "note": "All four sub-claims still hold. The mutants M8/M9b/M13c/M13d/M28/M29 could not be re-verified without running tests (UNKNOWN). Small UI robustness work, several independent items; split if taken up."
+  }
+ },
+ {
+  "id": "eneo-epim.32",
+  "title": "Flows: develop's bundled tool runtime (http://tool-runtime) is refused by the flows outbound destination policy",
+  "priority": 3,
+  "status": "open",
+  "description": "Found in the develop merge 2026-10-15: develop ships isolated tool runtime servers at http://tool-runtime; flows' MCP tool steps use the one outbound destination policy (vetted address, https-only credentials), which refuses internal hosts without an allowlist entry. Decide with the policy owner whether flows may use the bundled runtime (typed allowlist) — no transport bypass.",
+  "validation": {
+   "id": "eneo-epim.32",
+   "scope": "flows_core",
+   "state": "stale_or_obsolete",
+   "category": "robustness",
+   "real_improvement": false,
+   "priority_ok": "close; no longer needed",
+   "evidence": "main/config.py:449-457 (flow_tool_allow_private_networks defaults to True, written for internal MCP servers); flows/runtime/executor.py:753 (tool policy uses it); flows/runtime/egress/policy.py:34-39,114-119 (10/8, 172.16/12, 192.168/16, fc00::/7 allowed when set); mcp_servers/domain/entities/mcp_server.py:37-43,135-153,181-186 (bundled rows have capability purposes compute/charts/file_analysis/file_creation, so is_general_server is false)",
+   "note": "The premise is false. The MCP tool policy allows private networks by default, so a http://tool-runtime address on a docker private network is not refused on address grounds. Bundled rows are capability servers, so flows reject them earlier as server_not_general (unattended_tool_use.py:164) before any address check. Only a loopback/link-local address or a deployment that set flow_tool_allow_private_networks=false would be refused. No live check was done."
+  }
+ },
+ {
+  "id": "eneo-epim.34",
+  "title": "Flows run dialog: do not show a text box when no step reads run input",
+  "priority": 3,
+  "status": "open",
+  "description": "Walkthrough friction #11 and Builder slice 2: the run form shows a free-text box no step reads (FlowRunInput / flow_run_input contract, showFreeformTextInput in the run dialog). Use the same prompt-aware 'steps read run input' owner the Builder uses (steps_read_run_input) so the run dialog and the Builder agree.",
+  "validation": {
+   "id": "eneo-epim.34",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "web .../components/FlowRunDialog.svelte:212 (showFreeformTextInput = !hasFormFields && !hasRuntimeFileInputs); backend flow_variable_definitions.py:114-135 (FlowRunInput.free_text, same rule); the Builder owner is ai_builder/ai_builder_step_reads.py:256,311 (reads_run_input, steps_reading_run_input; the bead's name steps_read_run_input is now steps_reading_run_input)",
+   "note": "The run dialog still shows the free-text box whenever there are no form fields or files, whether or not any step reads run input. Backend and Builder rules still disagree. The owner sits inside ai_builder, so it must be lifted to a flows-level owner (and exposed via the run contract) before the dialog can use it; the dialog cannot reuse it directly."
+  }
+ },
+ {
+  "id": "eneo-epim.5",
+  "title": "Flow MCP S3: MCP transport contract: typed uncut result with structuredContent, pre-decode ceiling for tools/call, total time budget, destination policy with a separate internal endpoint path",
+  "priority": 2,
+  "status": "in_progress",
+  "description": "Outside the Flows folder. Needs bead eneo-plsj slice S0 (egress move to a shared place). Chat's shortening and generic error text stay above the contract. Private networks for admin-registered servers by a deployment setting, default on; loopback, link-local, metadata refused; Eneo's own loopback tools keep their own path. Design 5.4. Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1, decided by the owner 2026-10-12).",
+  "validation": {
+   "id": "eneo-epim.5",
+   "scope": "other",
+   "state": "already_fixed",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "close or update status: marked IN_PROGRESS but landed",
+   "evidence": "backend/src/eneo/mcp_servers/application/unattended_tool_call.py:88-160 (UnattendedToolCaller, one time budget, MCPToolCallTimedOut, MCPToolAnswerTooLarge); mcp_client.py:933-949,1402 (MCPToolAnswer with structured content, ceiling before decode); flows/runtime/tool_input.py:640 VettedClientFactory; main/config.py:457 flow_tool_allow_private_networks=True",
+   "note": "The transport contract is in the tip: typed uncut answer with structured content, pre-decode ceiling, total budget, and the flows destination policy through VettedClientFactory with a deployment setting (the bead's 'no new setting' line is out of date; docs errors.mdx:349 cites FLOW_TOOL_ALLOW_PRIVATE_NETWORKS). The 'call_tool_uncut' name no longer exists. Note the egress move (eneo-plsj S0) was not needed for this: policy still lives in flows/runtime/egress."
+  }
+ },
+ {
+  "id": "eneo-epim.50",
+  "title": "Flows validation: a first step reading föregående_steg passes validation but fails at run time",
+  "priority": 2,
+  "status": "open",
+  "description": "Found by the delta-adversary on the epim.43 gate-r1 fixups (demo-stack/specs/gate-out/adv-delta-4046-gate-r1.md, P3-5). Pre-existing, not caused by the batch.\n\nA first step whose prompt or question reads {{ föregående_steg }} (the previous step's output) passes validation but fails at run time (\"Unknown variable\", flows/runtime/variable_resolver.py ~288): step 1 has no previous step. Validation should refuse it with a typed, model-correctable error naming the step. Since eneo-epim.43, an edit that inserts a step before such a step rebases it to previous_step and the reference then resolves, so the edit path repairs it by accident; the create path and saved flows still carry the gap.\n",
+  "validation": {
+   "id": "eneo-epim.50",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P2 (publishable flow that fails at every run)",
+   "evidence": "flow_variable_definitions.py:50-59 (föregående_steg is always a reserved runtime variable); ai_builder/ai_builder_validation_references.py:~95-96 (TemplateReferenceKind.RUNTIME -> continue); variable_resolver.py:288-303 (alias set only when current_step_order > 1); only refused for tool arguments at flow_validators.py:1425-1430",
+   "note": "Prompt/question reads of föregående_steg on step 1 are not refused at validation or by the Builder validator; the tool-argument path already refuses it via names_step_without_result (step_lineage.py:391). The owner for the rule exists, so the fix is to call it from the prompt/question paths. I did not run a flow through publish."
+  }
+ },
+ {
+  "id": "eneo-epim.57",
+  "title": "MCP https rule follow-ups (flows): userinfo as its own refusal, tool-unavailable panel steps, mcp-servers.mdx flows section, What's new",
+  "priority": 3,
+  "status": "open",
+  "description": "From the adversary of fix/flows-mcp-credential-https (2026-10-19, verdict ship): (1) an https address with user info passes the decision but is refused at the call as destination_blocked; consider a decision-level refusal for user info so the remedy text is right; (2) ToolsUnavailable.svelte shows add/switch-on steps also for this refusal, which the space settings cannot fix; (3) guides/mcp-servers.mdx 'MCP in Flows and AI Builder' (302-331) lacks the https bullet and says the AI Builder does not propose tool steps (stale); (4) decide a releases.json What's new entry: publish now refuses a flow it accepted before; (5) after develop (PR #1115) merges into feature/flows-and-builder, retarget deployment.mdx/flows docs links to the #credentials-need-https and internal-CA anchors.",
+  "validation": {
+   "id": "eneo-epim.57",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "docs",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (item 3, the false docs sentence, could go first)",
+   "evidence": "mcp_servers/domain/credential_transport.py:41-52 (https + userinfo returns None, so the decision passes); flows/http_transport/effective_url.py:56 (call refuses userinfo); tool_input.py:567,587 (destination_blocked); web .../components/tool/ToolsUnavailable.svelte:56-60 (showsSteps only excludes space_is_personal); docs-site/src/content/guides/mcp-servers.mdx ('MCP in Flows and AI Builder' section: no https bullet, says 'AI Builder does not propose tool steps'); ai_builder/ai_builder_tool_validation.py:1-12 (Builder does propose tool steps); packages/whats-new/releases.json (no entry for the publish refusal)",
+   "note": "All of items 1-4 still hold at the tip. The stale docs sentence is a false claim in docs, since the Builder proposes tool steps. Item 5 depends on develop PR #1115 merging and cannot be checked from the tip (UNKNOWN). Item 4 is an owner decision, not a defect."
+  }
+ },
+ {
+  "id": "eneo-epim.58",
+  "title": "Flow tool list byte budget: count classification name/description and guard every read text",
+  "priority": 3,
+  "status": "open",
+  "description": "The unattended tool list (mcp_servers/infrastructure/repo_impl/unattended_tool_facts_reader.py) selects whole SecurityClassification entities per row (server_level, pre-existing at 15e5a1454); their name and description (unbounded Text) are not counted in the 8 MiB SQL byte bound, so an admin-written multi-MiB description is read per listed tool uncounted (probe t6 in adv-flows-https-delta-r1: 3 MiB x rows, text_bytes 185). Fix: outer-join the two classification aliases into the listed statement and add their name/description to the byte sum (red test: a 3 MiB description crosses the bound), and add a parity guard: every str field of ListedServer/ListedTool is in LISTED_TEXT_FIELDS, _DECISION_TEXT_FIELDS or a named Literal-bounded allowlist (purpose, http_auth_type). Found by the delta-adversary of fix/flows-mcp-credential-https (2026-10-19).",
+  "validation": {
+   "id": "eneo-epim.58",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (admin-written text only, so reach needs a multi-MiB classification description)",
+   "evidence": "mcp_servers/infrastructure/repo_impl/unattended_tool_facts_reader.py:242-244 text_bytes sums only LISTED_TEXT_FIELDS + _DECISION_TEXT_FIELDS (:55-67); :231-233 docstring states classification name/description are read but not counted; :274-275 server_level/space_level aliases are selected whole in :288-345; security_classifications/presentation/security_classification_models.py:19-36 name/description have no max length",
+   "note": "Gap confirmed in source. A parity guard of the kind asked for already exists in part (test in tests/unittests/flows/test_flow_tool_options.py compares LISTED_TEXT_FIELDS with the response model) but does not cover the classification columns. Alternative to the SQL change: bound classification name/description at the API."
+  }
+ },
+ {
+  "id": "eneo-epim.6",
+  "title": "Flow MCP S4: deterministic pass-on of structured input as a step's JSON output, without a model (HTTP input can use it at once)",
+  "priority": 2,
+  "status": "open",
+  "description": "Flows only, no dependency, needs no decision: can start first. In the existing output mode owner; validated against the output contract; two users from the start (HTTP input today, tool input later). Design 5.2 last bullet. Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1, decided by the owner 2026-10-12).",
+  "validation": {
+   "id": "eneo-epim.6",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "close: obsolete as open work",
+   "evidence": "commit 9035ad832 'a step can pass its JSON input on as its output without a model'; backend/src/eneo/flows/enums.py:78 COPY_INPUT; flows/runtime/step_handlers/copy_input.py:33; flows/output_modes.py:72 copy_input_violation (json to json); flows/runtime/executor.py:1526",
+   "note": "copy_input output mode exists as the deterministic pass-on; it is validated in output_modes and the capability manifest (flow_capability_manifest.py:307,698,720). Bead is stale and can be closed after confirming the HTTP-input case is covered by its tests."
+  }
+ },
+ {
+  "id": "eneo-epim.8",
+  "title": "Flow MCP S6: web: step editor with tool picker, argument bindings and test call; publish messages; run view of calls; admin reverse lookup and warnings",
+  "priority": 2,
+  "status": "open",
+  "description": "shadcn, sv and en. Reverse lookup over published definitions (not the existing count). Design 5.9. Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1, decided by the owner 2026-10-12).",
+  "validation": {
+   "id": "eneo-epim.8",
+   "scope": "flows_web",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "keep P2, narrow the bead to the open parts",
+   "evidence": "landed: frontend/apps/web/src/lib/features/flows/components/tool/ToolPicker.svelte, ToolConfigPanel.svelte, ToolArgumentRow.svelte; frontend/apps/web/src/routes/(app)/admin/mcp-servers/MCPServerFlowUsage.svelte; backend flows/api/flow_tool_usage_router.py:75. Missing: no tool_call_state or 'tool call -> answer -> processing' view in web (rg tool_call_state frontend/apps/web/src: only chat, ai-builder protocol), no test-call UI",
+   "note": "Step editor with tool picker and bindings, publish refusal display and the admin reverse lookup are done. Still open: run view of tool calls (failure stage, duration, size, UX finding 9; backend exposes attempt tool_call_state in flows/api/flow_models.py:2314), a test call in the editor, and the generic two-tool docs journey (finding 14, not found in docs)."
+  }
+ },
+ {
+  "id": "eneo-epim.9",
+  "title": "Flow MCP S7: end to end on a fixture MCP server (two reads, analysis, report) started by a service key; guide 'make an MCP server usable from a flow'",
+  "priority": 2,
+  "status": "open",
+  "description": "The release criterion; the proofs of design section 10. Nothing SEAB-specific (owner 2026-10-12). Design: demo-stack/specs/flows-quality/plans/flow-mcp-design.md (v2.1, decided by the owner 2026-10-12).",
+  "validation": {
+   "id": "eneo-epim.9",
+   "scope": "flows_docs_ci",
+   "state": "still_true",
+   "category": "test_debt",
+   "real_improvement": true,
+   "priority_ok": "keep P2: it is the release criterion for the MCP epic",
+   "evidence": "backend/tests/integration/flows has only test_flow_tool_call_evidence.py, test_flow_tool_step_retry.py, test_flow_tool_step_sessions.py; rg for a fixture/FastMCP server in tests/integration/flows and mcp_servers: no hit; no docs guide 'make an MCP server usable from a flow' under frontend/apps/docs-site/src/content/guides/flows",
+   "note": "No end-to-end test of two reads, an analysis step and a report against a fixture MCP server started by a service key, and no guide with that title. The runtime pieces it would exercise (tool_input.py, unattended_tool_call.py) have landed, so the slice is now unblocked."
+  }
+ },
+ {
+  "id": "eneo-f0xg",
+  "title": "Flows API consumer DX: execution limits, structured failure facts and recovery affordances exposed on the contract",
+  "priority": 1,
+  "status": "open",
+  "description": "Owner 2026-09-20 09:17: web apps and other systems consume Eneo flows as their AI engine; every improvement must also be judged from that consumer's perspective. Items arising from the 2026-09-20 work, each a small slice with docs + SDK types regenerated: (1) Run error carries structured facts, not only prose: phase (input_resolution | transcription | retrieval | provider_request | mapped_item | finalization), completed_items/total_items for mapped steps, and provider_work_may_have_completed (bool) so a consumer can decide retry safety by fields (retryable already exists). Owner: FlowRunError/FlowRunErrorDetails (shared with eneo-zjdh). (2) Execution limits visible before a run starts: the run contract (GET run-contract) lists per-step effective budget seconds, the run ceiling, audio ceilings (max duration, max decoded bytes, once gate 2 lands) and the inline text cap, so a consumer can validate inputs client-side and size its polling; today only steps_requiring_review and input limits are listed. (3) Recovery affordances as capabilities, not docs: FlowRunStatusCapabilityPublic gains can_retry_from_failed_step once eneo-3e4 lands, and the review checkpoint hypermedia already carries approve_and_continue_template (landed 591ca1f7f). (4) One error catalog for consumers: the SDK error-code files and docs errors table are generated from FlowApiErrorCode; keep every new code (flow_step_timeout, typed_io_audio_exceeds_limit) flowing through that generator, with phase-aware consumer_action text. (5) Idempotency rules stated once: run creation optional, both continuation endpoints required; the API guide table is the owner. (6) Long-running runs: document the expected polling pattern and status capabilities (should_poll, is_terminal) next to the budget defaults so a consumer never guesses a timeout. Non-goals: webhooks redesign, SDKs beyond eneo-js.",
+  "validation": {
+   "id": "eneo-f0xg",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "P2, split into children; as one P1 epic it is too broad",
+   "evidence": "Done: flow_run_error.py:346 (phase), :87 completed_items, :417 provider_work_may_have_completed; flow_api_error_code.py:124 STEP_TIMEOUT. Open: api/flow_run_status_capability_models.py (no can_retry_from_failed_step, only can_request_redispatch :72), api/flow_run_contract_models.py (no per-step budget or run ceiling; only runtime_upload_policy and audio max_duration); docs mention should_poll only in docs/flows/external-transcription-service.md",
+   "note": "Item 1 (structured error facts) and the error catalog entries (item 4) exist. Still missing: run-contract per-step budgets and run ceiling (2), a retry capability flag although a retry router exists (3), and a stated polling pattern next to budget defaults (6). Split the remaining items into small slices."
+  }
+ },
+ {
+  "id": "eneo-f282",
+  "title": "Deleting a user assistant that a flow step references answers 500 (unhandled RESTRICT foreign key)",
+  "priority": 2,
+  "status": "open",
+  "description": "Found 2026-10-11 by the FLOWS robustness constraint sweep, source reading at f49ee3c81, NOT executed (medium confidence). POST /api/v1/flows/ accepts steps[].assistant_id of an ordinary user assistant in the space: FlowService._validate_assistant_scope_for_steps returns early when owning_flow_id is None (create), while PATCH requires the assistant to be owned by the flow. DELETE /api/v1/assistants/{id} then runs a plain delete (spaces/space_repo.py _delete_assistants, no flow-step check) and violates flow_steps.assistant_id RESTRICT; nothing translates the IntegrityError (the global handler only maps *_active_nickname indexes). The web UI creates flows with steps: [] so this is an API-client path. Decision needed: refuse a foreign assistant at create (apply the ownership rule there), or refuse the delete with a typed reason. Test to extend: tests/integration/flows/test_flow_service_step_removal.py (has a user_assistant scenario). Recorded in demo-stack/specs/found-outside-scope.md.",
+  "validation": {
+   "id": "eneo-f282",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P2 (API-client path only; 500 on a plain delete)",
+   "evidence": "backend/src/eneo/flows/application/flow_service.py:801-806 (create returns early when owning_flow_id is None and require_owned_by_flow is False; require_owned_by_flow=True is used nowhere in src); assistants/assistant_repo.py:1110-1125 plain delete with no flow_steps check; database/tables/flow_tables.py:280-283 assistant_id ondelete RESTRICT; server/exception_handlers.py:546-551 re-raises non-nickname IntegrityError",
+   "note": "A user assistant can be referenced by a flow step created via POST /flows/ with steps, and deleting it hits the RESTRICT FK and answers 500. Still needs the decision: refuse a foreign assistant at create, or refuse the delete with a typed reason. Extend tests/integration/flows/test_flow_service_step_removal.py (user_assistant scenario exists at :368-400)."
+  }
+ },
+ {
+  "id": "eneo-g3b7",
+  "title": "Flow settings page: refresh run-limit bounds and hint when the server capacity changes while the page is open",
+  "priority": 3,
+  "status": "open",
+  "description": "runcap gate it2 GREEN (02607cf36) P3: load capacity 3, reset via 'Use server capacity' returns capacity 8 -> the field shows 8 but 7 fails validation against the stale bound 3 (+page.svelte:107 initial bounds, :451 reset discards the response capacity). Refresh bounds/hint from the response, or require a reload. Backend enforcement is correct.",
+  "validation": {
+   "id": "eneo-g3b7",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": false,
+   "priority_ok": "suggest P4",
+   "evidence": "frontend/apps/web/src/routes/(app)/admin/flow-settings/FlowSettingsAdminView.svelte:97 const runCapacity = initial...max_concurrent_runs_capacity (never updated), :105-106 bounds from it, :490-502 useServerCapacity commits updated.max_concurrent_runs but discards the response capacity",
+   "note": "Stale-bound behaviour is as described (bead line numbers :107/:451 moved into the new View component). It only appears if server capacity changes while an admin has the page open (needs a deploy/env change); backend enforcement is correct and the refusal message already says reload. Speculative edge, low value."
+  }
+ },
+ {
+  "id": "eneo-ggvt",
+  "title": "Transcript review loads every transcript-source page into one array; measure a 5 h editor before adding incremental loading",
+  "priority": 3,
+  "status": "open",
+  "description": "Astra max ruling 2026-09-22 Q5: transcriptSource.ts:43 fetches all pages of the paged transcript-source route into one array. Measure the real five-hour review screen first; add incremental loading only if that measurement requires it.",
+  "validation": {
+   "id": "eneo-ggvt",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "performance",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (gated on a 5 h measurement)",
+   "evidence": "frontend/apps/web/src/lib/features/flows/transcriptSource.ts:45-70 (loop over next_segment_index, segments.push(...page.segments))",
+   "note": "loadTranscriptSource still pages the whole source into one array. The bead is explicitly measure-first and no measurement is readable here, so incremental loading is speculative until the 5 h editor is measured."
+  }
+ },
+ {
+  "id": "eneo-gxjl",
+  "title": "Provider-call receipts label SDK-synthesized usage, model and ids as provider evidence",
+  "priority": 2,
+  "status": "open",
+  "description": "Found by the Astra streaming design pass (2026-09-17, finding 4): flows/infrastructure/flow_provider_call_recorder.py (~:162) classifies every supplied count as provider-reported, but LiteLLM synthesizes usage on bare EOF (probe: 8 input and 1 output token with no provider usage), Anthropic streams drop the native model and generate an id, and non-streamed Gemini, Cohere and Responses conversions assign the requested model label. Record provider-native identity and usage only from documented normalized evidence; otherwise None per dimension with the existing estimate path; never promote SDK-generated ids, requested-model labels or estimates to verified provider evidence. Owner decision pending on accepting nullable native identity. Model agnostic.",
+  "validation": {
+   "id": "eneo-gxjl",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P2 but blocked on the owner decision about nullable native identity; usage part could shrink it to P3",
+   "evidence": "backend/src/eneo/flows/infrastructure/flow_provider_call_recorder.py:~160-170 (input_source 'provider' whenever the count is not None); completion_models/infrastructure/stream_collector.py:269,302-319 (SDK-generated usage no longer used, native usage only); tenant_model_adapter.py:2074-2085 (response_model=getattr(response,'model'), id via provider_response_ids.py:7-28)",
+   "note": "Streaming usage is now taken from native provider chunks, so the synthesized-EOF-usage part is fixed. The model label and id are still read from the rebuilt SDK response and labeled as provider evidence, and non-stream usage is still not told apart. I did not verify per-provider behaviour (needs a live run)."
+  }
+ },
+ {
+  "id": "eneo-hpj",
+  "title": "Tidy tip d9c6e3709: two pre-existing test failures (step card SPEAKER_00, reserved input keys)",
+  "priority": 2,
+  "status": "open",
+  "description": "Reproduced on origin/refactor/flows-tidy-ai-builder at d9c6e3709 (Alexander's Lyssna transcript review 7362bb6e8 + speaker suggestions d9c6e3709) in the tidy clone, independent of the autosave/history slices: (1) frontend FlowRunEvidenceStepCard.test.ts 'renders the transcription step from the stored segments' expects the raw label SPEAKER_00 but the card now renders 'Talare 1' (speaker labels); (2) backend tests/unittests/flows/test_flow_run_reserved_input_payload_keys.py::test_reserved_input_payload_keys_are_sorted_for_sdk_output (new reserved key added to flow_run_input_envelope.py without re-sorting the SDK output list?). Owner: the author of those commits; excluded from the landing baseline of eneo-37n/eneo-lmw.",
+  "validation": {
+   "id": "eneo-hpj",
+   "scope": "flows_web",
+   "state": "already_fixed",
+   "category": "test_debt",
+   "real_improvement": false,
+   "priority_ok": "close",
+   "evidence": "frontend/.../components/FlowRunEvidenceStepCard.test.ts:297-298 (expects m.flow_transcript_editor_speaker({number:1})); backend/tests/unittests/flows/test_flow_run_reserved_input_payload_keys.py:41-49 lists exactly the keys in backend/src/eneo/flows/flow_run_input_envelope.py:65-67 and the generated SDK list",
+   "note": "Both tests now match the code at the tip: the card test expects the numbered speaker label, and the sorted reserved-key list agrees with the source and the SDK file. I did not run them; I read the code."
+  }
+ },
+ {
+  "id": "eneo-hud2",
+  "title": "Flows: a worker shutdown ends a running flow run with a typed shutdown outcome (fail fast), not a stalled-run failure minutes later",
+  "priority": 2,
+  "status": "open",
+  "description": "Quality program A4b (demo-stack/specs/flows-mcp-tools/quality-program-20261020.md section 5). Today a SIGTERM-cancelled run stays RUNNING until the 180 s heartbeat expiry and the reconciler marks it FAILED run_worker_stalled. Constraints from Astra pass 2: arq 0.28 on_shutdown runs after jobs are awaited (arq/worker.py:873), so it cannot signal the cause inside the job; the flow_run_execution_owner contextvar resets when track exits (runtime/execution_heartbeat.py:115), so the outer task catch must carry the acquired owner explicitly; webhook-waiting runs are RUNNING (executor.py:1312), so status alone does not tell them from active execution. No requeue (unknown-outcome steps need idempotency first). Test: SIGTERM vs timeout vs user cancel vs ownership loss, webhook-waiting run untouched.",
+  "validation": {
+   "id": "eneo-hud2",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "robustness",
+   "real_improvement": true,
+   "priority_ok": "keep P2",
+   "evidence": "flows/runtime/tasks.py:719-725 (reconciler terminalizes with RUN_WORKER_STALLED 'Flow execution heartbeat expired'); flows/runtime/execution_heartbeat.py:100-118 (owner contextvar reset in finally; CancelledError re-raised without a typed shutdown outcome); no shutdown outcome code in flow_api_error_code.py",
+   "note": "No typed worker-shutdown outcome exists: a SIGTERM-cancelled run stays RUNNING until the 180 s heartbeat expiry and then fails as flow_worker_stalled. The bead's constraints (arq on_shutdown ordering, webhook-waiting runs are RUNNING) are design constraints I did not re-verify in arq."
+  }
+ },
+ {
+  "id": "eneo-iryf",
+  "title": "Flow editor: expose the step execution budget (timeout_seconds) with the deployment ceiling",
+  "priority": 2,
+  "status": "open",
+  "description": "Design ruling (flows-resource-safety-design F9, 2026-09-20): the API step field timeout_seconds is now the whole step's execution budget (input resolution incl. transcription, retrieval, every provider request, finalization; refusal code flow_step_timeout), but the flow editor exposes no per-step control (advanced JSON drafts expose four other fields, advancedJsonDrafts.ts:7), so 'raise the step's time budget' is only actionable through the API. Add the control in the step editor (shadcn-svelte primitives only; Swedish first; show the deployment ceiling from the runtime policy and the default when unset; (?) tooltip explaining what the budget covers and the provider-work disclosure). Scope: flows editor UI + eneo-js types already regenerated. Verify at the standing desktop widths and both themes. Not a gate for the backend slice eneo-whc3.",
+  "validation": {
+   "id": "eneo-iryf",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "keep P2 at most; API-only today, UI-only users cannot act on the timeout error",
+   "evidence": "Backend field exists: backend/src/eneo/flows/api/flow_models.py:646 and domain/flow.py:117; the only timeout_seconds in the web flows feature is the HTTP step config (components/http/HttpConfigPanel.svelte:159-171); FlowStepEditPanel.svelte has no timeout control; runtime/step_deadline.py:133 tells users to raise timeout_seconds in the flow definition",
+   "note": "The editor still has no control for the step execution budget. The user-facing error text (en.json:5130, :5362) now says to ask an administrator to raise the normal limit, which partly masks the gap but does not give per-step control. Needs the runtime-policy ceiling and default exposed to the editor, shadcn controls, and sv/en messages."
+  }
+ },
+ {
+  "id": "eneo-j20s",
+  "title": "Flows: narrow the space loads on runtime transcription and flow authorization",
+  "priority": 3,
+  "status": "open",
+  "description": "Follow-ups from gate-live-transcription-t4 it2 (2026-09-23). (1) Run-time transcription resolves its model through get_space_by_assistant, a full space load per audio step per run; narrowing needs a model-only read in the shared spaces repository (outside the flows scope: ask the owner before changing spaces/). (2) Authorization's space_service.get_space hydrates visible applications' attachments on every flows route (space_repo.py:1603). The T4 slice added no reads on top; this is pre-existing cost. Measure first (query capture on a space with many apps/attachments), then decide.",
+  "validation": {
+   "id": "eneo-j20s",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "performance",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (measure-first, speculative)",
+   "evidence": "backend/src/eneo/flows/runtime/transcription.py:645-657 (load_flow_space -> space_repo.one), :1258; backend/src/eneo/flows/api/flow_access_context.py:135,:286 (space_service.get_space); backend/src/eneo/spaces/space_service.py:287-300 and space_repo.py:1577-1589 (access-facts/applications-projection reads)",
+   "note": "Premise (1) is outdated: runtime no longer calls get_space_by_assistant; it loads the flow's space by id (space_repo.one), still a full space load per audio step. Premise (2) is partly narrowed: some flow routes use get_space_access_facts without the MCP catalog (flow_access_context.py:215-225), but others still call get_space. No measurement exists, so this stays a measure-first perf idea, not a defect."
+  }
+ },
+ {
+  "id": "eneo-jijy",
+  "title": "Flow package export refuses ordinary editor-built flows (runtime_input false, retrieval_policy, stale HTTP/template config)",
+  "priority": 1,
+  "status": "open",
+  "description": "Owner report 2026-09-17 15:18, lab build 50849fe: POST /flows/{id}/package-exports/ -> 400 flow_package_export_step_config_not_portable; the UI blames HTTP credentials and names no step.\n\nVerified causes (Claude probe against tidy ffb44ee68 package models; Astra diagnosis session flow-package-export-diagnosis, iteration 1):\n- The editor stores input_config.runtime_input = false when file upload is off. This includes changing an upload step's input type to text (flowRuntimeInputConfig.ts serializeRuntimeInputConfig; flowStepTransitionPolicy.ts). The runtime parser accepts false (flows/domain/runtime_input.py). The strict package model FlowPackageStepInputConfig refuses it. item_map false: same.\n- output_config.retrieval_policy (typed FlowStepRetrievalPolicy, consumed by step_execution_runtime) is missing from FlowPackageStepOutputConfig, so a step carrying it is refused.\n- Editor transitions keep HTTP authored config (auth mode none) and template keys after a step leaves that mode. FlowService.update_flow persists them. Export refuses them.\n- Export silently drops active runtime uploads outside flow_input + audio/document/file (P1).\n- Package import does not apply the portable config models.\n- The error hides step_order/config_field, and the frontend maps only the code.\n\nNot changed by any commit after 50849fe. The owner's exact step is unproven: the response context names it.",
+  "validation": {
+   "id": "eneo-jijy",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "P2 (residual cause is narrow); keep as the one open item",
+   "evidence": "Fixed: flow_packages/domain/flow_package_draft.py:55-58 (runtime_input/item_map false accepted), :80 (retrieval_policy in the output model), flow_package_export_service.py:553-560 (active runtime uploads kept), :639-648 (error context names step_order and config_field). Still open: flow_package_export_service.py:625-633 (_reject_known_nonportable_config raises on any input_config with an 'auth' key, whatever the step's input_source) with frontend/apps/web/src/lib/features/flows/flowStepTransitionPolicy.ts:65-69 keeping step.input_config when the source leaves http_get",
+   "note": "Causes 1, 2 and 4-5 are fixed. Stale HTTP authored config left behind after a step switches away from http_get is still refused at export, and nothing prunes it at save; the UI still maps only the error code, not the named step. Verify the stale-config case with a quick repro before a slice."
+  }
+ },
+ {
+  "id": "eneo-jijy.2",
+  "title": "Make step retrieval_policy portable in flow packages",
+  "priority": 2,
+  "status": "open",
+  "description": "Astra slice 3: round-trip the existing typed FlowStepRetrievalPolicy (output_config.retrieval_policy) through export and import with its mode constraints. No duplicate model, and fail_closed is never silently removed.",
+  "validation": {
+   "id": "eneo-jijy.2",
+   "scope": "flows_core",
+   "state": "already_fixed",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "close",
+   "evidence": "backend/src/eneo/flow_packages/domain/flow_package_draft.py:80 (retrieval_policy: FlowStepRetrievalPolicy, the existing flows.domain type); flow_package_export_service.py:603-604; tests/unittests/flow_packages/test_flow_package_export_service.py:463 and :1173 (fail_closed preserved); test_flow_package_models.py:60 (invalid policy rejected)",
+   "note": "Export and import round-trip the typed policy with its mode check through the existing model; fail_closed is preserved and tested. No duplicate model."
+  }
+ },
+ {
+  "id": "eneo-jijy.3",
+  "title": "Editor: clear obsolete mode config on step transitions and delete the legacy webhook URL fallback",
+  "priority": 2,
+  "status": "open",
+  "description": "Claude slice 4: flowStepTransitionPolicy.ts removes known obsolete HTTP/template config when a step leaves that mode. Delete the URL-only webhook fallback (FlowStepOutputSection.svelte:287), which the backend refuses (flow_validators_http.py:99). The backend stays the authoritative cleanup owner. Do not broadly clear active uploads.",
+  "validation": {
+   "id": "eneo-jijy.3",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P2 (could be P3: UI-only cleanup, backend already refuses)",
+   "evidence": "frontend/apps/web/src/lib/features/flows/components/FlowStepOutputSection.svelte:291-303 (legacy URL-only fallback, onWebhookUrlChange wired at FlowStepEditPanel.svelte:1345); backend/src/eneo/flows/http_transport/normalizer.py:38-43 rejects config without auth; flowStepTransitionPolicy.ts:324 keeps output_config when leaving http_post",
+   "note": "The URL-only webhook row is still there although the backend rejects a flat config with no auth field (legacy flat HTTP config no longer supported). applyOutputModeChange does not clear obsolete http_post config on the mode change, so both halves of the bead still stand."
+  }
+ },
+ {
+  "id": "eneo-jqhf",
+  "title": "docs-site flows guides fail prettier on tidy",
+  "priority": 3,
+  "status": "open",
+  "description": "frontend/apps/docs-site/src/content/guides/flows-api-guide.mdx and flows/reference/errors.mdx fail prettier --check on tidy (pre-existing, long table rows). Format at the owner or add the docs-site prettier config/ignore the project intends, so the frontend-format hook does not need SKIP for docs-only commits.",
+  "validation": {
+   "id": "eneo-jqhf",
+   "scope": "flows_docs_ci",
+   "state": "stale_or_obsolete",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "keep P3 or close",
+   "evidence": ".pre-commit-config.yaml:73-79 (frontend-format files regex lists md but not mdx); frontend/apps/docs-site/package.json (no prettier/format script); frontend/.prettierignore",
+   "note": "The frontend-format hook's file regex matches only svelte|ts|tsx|js|jsx|css|scss|json|md|yaml|yml|html, so .mdx files never reach prettier and docs-only commits need no SKIP. The stated 'fails prettier --check' was not run here (prettier not executed under the read-only rules), so the pre-existing failure itself is unverified. No automated check formats these files."
+  }
+ },
+ {
+  "id": "eneo-k5zo",
+  "title": "Scale deferred: mapped/audio concurrency, automatic expiry renewal, extra expiry settings, automatic reduction (need demonstrated demand)",
+  "priority": 3,
+  "status": "open",
+  "description": "Astra ruling 2026-09-20: defer mapped and audio concurrency (single AsyncSession ownership; per-call evidence must stay), automatic renewal of review expiry (can make waits indefinite unless an absolute lifetime exists), a tenant review-expiry default (reasonable operator functionality but fixes neither G1 nor storage growth; keep 14 days pending contrary evidence), and automatic reduction. Before any of these: freeze the workload 'at scale' must support (concurrency, recording duration, file counts, mapped cardinality, latency targets) and measure peak memory, temp storage, queue delay and cleanup throughput on the deployed routes; run a representative expired-review backlog test (reconciler returns after one success per batch; 100 per tenant per invocation, flow_review_expiry_reconciliation.py:67).",
+  "validation": {
+   "id": "eneo-k5zo",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (parking list, demand-gated)",
+   "evidence": "backend/src/eneo/flows/application/flow_review_expiry_reconciliation.py:19 (_EXPIRED_CHECKPOINT_RECONCILE_BATCH_SIZE = 10), :29-70 (returns 1 after the first success); backend/src/eneo/flows/flow_review_expiry_policy.py:5 (14-day default)",
+   "note": "A deliberate deferral list that still matches the code (14-day default, no auto-renewal, one terminalisation per call). The cited line :67 and the '100 per tenant' figure are stale: batch size is now 10. No action until a demand/workload contract exists."
+  }
+ },
+ {
+  "id": "eneo-knk",
+  "title": "Restore Flow API guide allowlist parity",
+  "priority": 2,
+  "status": "open",
+  "description": "Current origin/refactor/flows-tidy-ai-builder at 8a38a1cf123a67cd39117a052df8d925904f9d0d fails test_flow_api_guide_backticked_flow_codes_are_cataloged because the allowlisted retention field flow_run_history_retention_days is absent from the Flow API guide. The same selector fails on common parent 502d117f257ca468eee46842ab56562a0a0e159a and product candidate effb1e35954cb75704cc597abf413390d2a05c81; the six-commit AI Builder treatment changes none of the test, guide, or error-code catalog paths.",
+  "validation": {
+   "id": "eneo-knk",
+   "scope": "flows_docs_ci",
+   "state": "already_fixed",
+   "category": "docs",
+   "real_improvement": false,
+   "priority_ok": "close; no work left",
+   "evidence": "/tmp/flows-tip-read/backend/tests/unittests/flows/test_flow_api_error_codes.py:56-65 (allowlist no longer holds flow_run_history_retention_days); probe: pytest -k backticked at 044ec559c = 1 passed",
+   "note": "The exact selector test_flow_api_guide_backticked_flow_codes_are_cataloged passes at the tip: the allowlist no longer names the retention field and the guide no longer mentions it. Bead was filed against an older tidy branch."
+  }
+ },
+ {
+  "id": "eneo-ktwz",
+  "title": "User-provided DOCX templates: upload a Word template with content controls and fill it from a flow step",
+  "priority": 1,
+  "status": "open",
+  "description": "Owner 2026-09-20 15:37: users should be able to create their own DOCX templates. State today: DOCX filling through Word content controls landed 2026-09-08 (bead eneo-ytn, commit 5993a56aa; python-docx block writer, standard templates built by backend/scripts/build_standard_docx_templates.py; render_verbatim output). Missing: a space-owned template library: upload a .docx with content controls (validated: supported control profile, size/page limits, no macros), pick it as a step's output template (published step contract references the template by id + checksum), the Builder proposing it when the user attaches a template (attachment roles, eneo-ofm8 P4), preview of which controls will be filled and which stay empty (omission semantics from the 2026-09-08 ruling), versioning (a republish pins the template checksum), and the admin/space UI (shadcn). Needs an Astra design pass (whether: template library vs per-flow attachment; identity; authorization). Frontend UI is the orchestrator's.",
+  "validation": {
+   "id": "eneo-ktwz",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "P3: remaining part (a space-wide template library) is an undecided design question, not a defect",
+   "evidence": "backend/src/eneo/flows/api/flow_template_router.py:235 (upload_asset), flow_template_asset_service.py:92-188 (upload, inspect, checksum pin, create from attached file), domain/flow.py:164-181 (FlowTemplateAsset with checksum, placeholders, status), ai_builder/ai_builder_template_attachment_contract.py, FlowStepTemplateFillSection.svelte",
+   "note": "Most of the 'missing' list has landed per flow: upload and validation, controls preview via inspect, checksum pinned at publication, Builder reuse of an attached DOCX, shadcn UI. Not built: a space-owned library shared across flows (needs the owner design decision named in the bead). Rewrite or split the bead to the library question only."
+  }
+ },
+ {
+  "id": "eneo-lgdi",
+  "title": "Flows UI polish: file sizes ignore the reader's locale; two tooltip triggers lose their own click handler",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-10-11 by the FLOWS robustness frontend sweep (source reading). (1) lib/features/flows/flowByteSize.ts and a second formatter in components/FlowRunEvidence.svelte (formatBytes) use toFixed, so a Swedish reader sees 1.5 MB instead of 1,5 MB on every uploaded and evidence file row; one shared formatter with Intl.NumberFormat(getLocale()) and delete the copy; red test in flowByteSize.test.ts. Related: eneo-hl3o, eneo-iox (recorder size hint). (2) components/FlowStepBehaviorSection.svelte ('Förbättra instruktion') and FlowStepEditPanel.svelte (previous/next step buttons) spread bits-ui tooltip props and then set onclick, which replaces the trigger's own close-on-press handler (bead eneo-iuxr shape); use mergeProps. Cosmetic.",
+  "validation": {
+   "id": "eneo-lgdi",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (cosmetic)",
+   "evidence": "frontend/apps/web/src/lib/features/flows/flowByteSize.ts:9-19 (toFixed formatBytes); components/FlowRunEvidence.svelte:448-453 private formatBytes with toFixed; components/FlowStepBehaviorSection.svelte:176-183 and components/FlowStepEditPanel.svelte:1008-1018 spread {...props} then set onclick; existing locale-aware owner lib/core/formatting/formatBytes.ts:15-29 (Intl.NumberFormat via intlLocale())",
+   "note": "Both halves still true; a shared Intl-based formatter already exists in lib/core/formatting/formatBytes.ts, so the fix is to reuse it (units are m.storage_unit_*) and delete the two flow copies; tooltip triggers do not use mergeProps. Swedish decimal comma wrong on every file row is a real, small UX defect."
+  }
+ },
+ {
+  "id": "eneo-m5x",
+  "title": "Flows editor: a step's open chapters must survive leaving the stage and the temp->persisted id swap",
+  "priority": 3,
+  "status": "open",
+  "description": "Follow-up from the eneo-57x gate (2026-09-14, session ux-polish-gate-20260914 finding 3). Commit 09b7817be (module-global map in FlowStepChapter.svelte keyed on getStepChapterStateKey) was DROPPED from the polish lane: the key flips from the creation token to the persisted id when the panel is destroyed and reopened (flowStepEditorPresentation.ts ~52, FlowStepEditPanel.svelte ~724), so a newly saved step lost its open chapters, and the map retained every visited key with no teardown. Owner-level fix: keep chapter state with the FlowEditor-owned state, preserve identity across the token -> id swap, clean up on editor teardown, key chapters by stable ids not translated titles; touches the editor, FlowStepChapter, the panel's five chapters and two nested sections (well over 80 lines). Test: remount after save with the persisted id restores the chapters that were open under the creation token.",
+  "validation": {
+   "id": "eneo-m5x",
+   "scope": "flows_web",
+   "state": "partly_true",
+   "category": "robustness",
+   "real_improvement": false,
+   "priority_ok": "downgrade to P4",
+   "evidence": "flowStepEditorPresentation.ts:50-70 getStepChapterStateKey (creation token is the key during the temp-to-persisted id swap); FlowEditor.ts:268-320 (newStepOpenIntent owned by the editor, stepId reconciled on swap); FlowStepChapter.svelte:37-52 (per-instance SvelteMap, not module-global); FlowStepEditPanel.svelte:246 passes activeStepStateKey as resetKey",
+   "note": "The core defect (id flip losing chapters, module-global leak) is addressed: key is stable across the swap and the map is per component instance. What remains is that open state still lives in each FlowStepChapter instance, so it is lost when the panel unmounts or the intent is cleared; low user value, no leak."
+  }
+ },
+ {
+  "id": "eneo-nwvw",
+  "title": "Flows: typed_io_output_parse_failed cause says 'model output' for copy_input steps",
+  "priority": 4,
+  "status": "open",
+  "description": "After A3, copy_input.py:80 checks with side=output, so a non-JSON value (only nesting too deep reaches it; NaN/Infinity are refused earlier) gives typed_io_output_parse_failed, whose taxonomy cause names the model output. Widen the cause to the step's output value, or map copy_input separately.",
+  "validation": {
+   "id": "eneo-nwvw",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P4",
+   "evidence": "runtime/step_handlers/copy_input.py:80-85 (side=\"output\"); runtime/contract_check.py:28-33 (_NOT_JSON_CODE output -> TYPED_IO_OUTPUT_PARSE_FAILED); flow_error_taxonomy.py:1325-1331 cause 'The model output could not be parsed...'",
+   "note": "Still true: a too-deep copy_input value raises typed_io_output_parse_failed whose taxonomy cause says 'model output'. Tiny wording fix (widen cause to the step's output value); very rare path."
+  }
+ },
+ {
+  "id": "eneo-olj8",
+  "title": "Flows: webhook hard-stop counts untested for a mixed wave; a claim session cut at commit keeps charged claims until expiry",
+  "priority": 3,
+  "status": "open",
+  "description": "From the A2 round-2 delta adversary (gate-out/adv-qa2-webhook-budget-3156cdac2.md). (1) Mutant X2 (ended = [] in the TimeoutError branch of _deliver_flow_webhook_outbox) survives the slice's tests: no test has a wave with both a finished and a cut delivery, so the job's hard-stop error record and payload counts are unproven there. Fix: extend test_flow_webhook_outbox_keeps_the_claim_when_recording_blocks_to_the_hard_stop to 2 rows (one recorded, one blocked by a row lock) and assert delivered=1, unfinished=1. (2) Residual: if the hard stop cuts a claim session while it commits, claims may be committed with attempts charged and nothing sent until they expire; this needs a ~160 s DB stall. It is conservative and matches the documented unknown outcome. Note only. (3) The defensive expired() guard branch (mutant X3) is untested.",
+  "validation": {
+   "id": "eneo-olj8",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "test_debt",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (one-test extension; items 2 and 3 are notes only)",
+   "evidence": "tests/integration/flows/test_flow_webhook_outbox_delivery.py:2714-2775 still inserts row_count=1; flows/runtime/tasks.py:955-966 hard-stop branch (ended / unfinished_count) is what the extra row would pin",
+   "note": "The mixed-wave case (one recorded, one blocked) is not tested; mutant X2 would survive. Item 2 is a documented conservative residual, item 3 a defensive guard; only item 1 is actionable."
+  }
+ },
+ {
+  "id": "eneo-otgf",
+  "title": "Word example template: keep a concise output instruction in the control; move setup help to the UI/guide",
+  "priority": 3,
+  "status": "open",
+  "description": "Follow-up from the sync-v1b gate (gpt-6.1-sol, 2026-09-30, P3): frontend/apps/web/static/examples/eneo-word-template.docx (v1 9c3b9661c) replaced the 56-char output instruction in the 'dokument' control with 1,737 chars of setup tutorial. The attachment owner copies control text into the field's schema description (ai_builder_attachment_context.py:332) and the proposal prompt includes it (ai_builder_plan_proposal_task.py:410): irrelevant Builder context, and the document-title instruction is gone. Restore a concise output-purpose instruction in the control; keep setup help in the UI and designing-flows guide.",
+  "validation": {
+   "id": "eneo-otgf",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "frontend/apps/web/static/examples/eneo-word-template.docx (word/document.xml: sdt tag 'dokument', 1771 chars of tutorial text); backend/src/eneo/flows/ai_builder/ai_builder_attachment_context.py:332 (hint -> schema description), ai_builder_plan_proposal_task.py:466-468 (hint in proposal prompt)",
+   "note": "Read the docx: the single 'dokument' control holds ~1.7k chars of setup tutorial (no short output instruction). That text flows via placeholder.hint into the schema description and the proposal prompt (render_ai_builder_evidence_value caps it, but it is still noise). Fix is the asset plus UI/guide wording; it is a web static asset with a Builder-context effect."
+  }
+ },
+ {
+  "id": "eneo-p6l",
+  "title": "A1 Intake diagnostics: surface existing alignment, omission and speaker-review facts beside an optional transcript checkpoint",
+  "priority": 3,
+  "status": "open",
+  "description": "Astra: stored transcription language is the CONFIGURED language (transcription.py ~601), word probability is provider-dependent, forced-alignment confidence concerns placement; so expose existing facts only, no detected-language or speech-ratio claims, no conditional stopping (review policy is an unconditional checkpoint today, flow_review_policy.py ~41).",
+  "validation": {
+   "id": "eneo-p6l",
+   "scope": "flows_web",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (or close; speculative design note)",
+   "evidence": "frontend/.../flows/transcriptSegments.ts:58-85, components/TranscriptPlayer.svelte:170,817, components/TranscriptReviewEditor.svelte:633; backend flow_review_policy.py:34-41 (mode view/edit only, no condition)",
+   "note": "Premise facts hold (review policy is an unconditional view/edit checkpoint; configured language at runtime/transcription.py:596). But the 'existing facts' are already shown: uncertain forced-alignment words are marked/counted and omitted details are announced. What remains is an unspecified extra diagnostics panel; no concrete defect."
+  }
+ },
+ {
+  "id": "eneo-plsj",
+  "title": "Transcription service endpoint is called outside the flows outbound destination policy",
+  "priority": 2,
+  "status": "open",
+  "description": "Found 2026-10-11 by the FLOWS robustness review of the 2026-10-08..11 changes (source f49ee3c81), read-only; not fixed.\n\nFact: the endpoint of an admin-connected transcription / speaker identification service is checked for syntax only (backend/src/eneo/transcription_services/models.py parse_service_endpoint: http(s), a host, no credentials/query/fragment) and is then called with a plain httpx.AsyncClient (transcription_services/client.py `_http`, line 396 at f49ee3c81). Nothing under transcription_services/ calls the flows outbound destination policy (flows/runtime/egress/{policy,resolver,http}.py). Before 7ba811a63 the address came from an operator environment variable; since then an administrator sets it through the transcription-services API, and the worker later sends recordings and transcript text to it.\n\nWhy it matters: the workspace rule is one outbound destination policy for flows traffic (memory one-outbound-destination-policy). As written, an administrator can point the service at a link-local or loopback address; the readiness check (`POST /transcription-services/{id}/check/`) then reports distinguishable results (unreachable / http status / malformed answer). The default httpx client also honours proxy environment variables, which the flows egress client does not. Redirects are not followed (httpx default). Severity is bounded by the administrator-only write.\n\nOwner decision needed before a fix: a real service usually runs on a private network, so \"strict\" versus \"allow private, refuse link-local/loopback/metadata\" is a policy choice (an admin/operator setting with a default, per the tunable-policy rule).\n\nSmallest fix once decided: build the client in TranscriptionServiceClient._http from the flows egress sender with the chosen policy and vet at connect time (a check only in parse_service_endpoint does not stop DNS rebinding). Estimated 30-60 product lines. Red test: tests/integration/transcription_services/test_service_connections.py, POST an endpoint the policy refuses and expect the typed refusal; today it is stored.\n\nNot verified by execution: no request was sent; facts are from source at f49ee3c81.\n",
+  "validation": {
+   "id": "eneo-plsj",
+   "scope": "other",
+   "state": "still_true",
+   "category": "security",
+   "real_improvement": true,
+   "priority_ok": "keep P2 (admin-only write bounds severity; policy decision was taken 2026-10-12: private allowed, loopback/link-local/metadata refused)",
+   "evidence": "backend/src/eneo/transcription_services/client.py:422-423 `httpx.AsyncClient(timeout=timeout, transport=self._transport)`; no egress or destination_policy import under transcription_services (rg); eneo/main/egress does not exist; flows/runtime/egress/{policy,resolver,http}.py and main/destination_policy.py exist",
+   "note": "Transcription service client still uses a plain httpx client with only a syntax check on the endpoint, so loopback/link-local/metadata endpoints and proxy env vars are not governed. Plan v3 (S0 move to a neutral egress package, S1 behaviour change) is not started in the tip. Code lives outside the flows folder though the traffic is flows-run traffic."
+  }
+ },
+ {
+  "id": "eneo-qebj",
+  "title": "Flow editor: no way to see or clear an underlag on transcription/template-fill steps",
+  "priority": 2,
+  "status": "open",
+  "description": "FlowStepEditPanel hides FlowStepInputTemplateSection for transcribe_only and template_fill (outputModeShowsUnderlagSection), yet an input_bindings underlag set elsewhere (e.g. by the AI builder) still replaces the step's source at run time (step_input_resolution.py ~417-438; transcribe_only handler emits the resolved text; backend test_transcript_spill.py:345-365). The editor locks the source select with the hint 'Används inte just nu: steget har ett eget underlag som gäller i stället' but offers no path to inspect or clear that underlag. Decide: show a read-only/clearable underlag summary for these modes, or a backend contract that these modes ignore bindings. Found in the night polish pass 2026-09-28 (gate-flow-polish-1 pass 2 P1).",
+  "validation": {
+   "id": "eneo-qebj",
+   "scope": "flows_web",
+   "state": "partly_true",
+   "category": "quality",
+   "real_improvement": true,
+   "priority_ok": "Lower to P3: narrow case (underlag set by the Builder on a transcribe_only step); editor already explains it",
+   "evidence": "frontend/apps/web/src/lib/features/flows/flowStepTypes.ts:17-27 (outputModeShowsUnderlagSection hides it for transcribe_only/template_fill; outputModeHonoursUnderlag now excludes template_fill); components/FlowStepInputSection.svelte:140-146 shows flow_step_input_source_underlag_decides_unshown; backend runtime/step_input_resolution.py:479-484 transcribe_only handling",
+   "note": "Template-fill half is resolved: the UI/contract now say a leftover underlag does nothing there. For transcribe_only the underlag still applies at run time, the section is hidden and the editor only shows a hint, with no way to inspect or clear it. Remaining work is a small read-only/clearable summary or a validator rule; a real but low-impact UX gap."
+  }
+ },
+ {
+  "id": "eneo-qwcy",
+  "title": "Flows web: remaining private copies of the JSON object check should use jsonObject.ts",
+  "priority": 3,
+  "status": "open",
+  "description": "After 7cdcc8604 (three modules share isJsonObject from frontend/apps/web/src/lib/features/flows/jsonObject.ts) these flows web modules still carry their own copy of 'typeof x === object && x !== null && !Array.isArray(x)': flowStepTransitionPolicy.ts:319, structuredReview.ts:7 and :17, speakerMappingReview.ts:28, speakerMappingConfig.ts:54, templateFillConfig.ts:137, flowEditorMetadata.ts:55, flowPackageTransfer.ts:516, transcriptSegments.ts:163, flowRuntimeErrorMapping.ts:282 (Gallring-owned file, cleanup holds a change there), components/FlowRunReviewCheckpointPanel.svelte:360, ai-builder/builderStepPhrases.ts:22. ai-builder/aiBuilderError.ts:21 accepts arrays on purpose and is NOT a copy. Do it as one behaviour-preserving commit after batch 2 (flowPackageTransfer.ts is in it) and the cleanup error-contract batch have landed; check each copy's exact truthiness (some return the value, not a boolean) before replacing. Found by the pre-gate adversary (gate-out/adv-flows-advanced-json-b7d258d40.md, P2).",
+  "validation": {
+   "id": "eneo-qwcy",
+   "scope": "flows_web",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "frontend/apps/web/src/lib/features/flows/structuredReview.ts:7,17,27; transcriptSegments.ts:163; templateFillConfig.ts:137; speakerMappingReview.ts:28; speakerMappingConfig.ts:54; flowStepTransitionPolicy.ts:357; flowPackageTransfer.ts:544; flowRuntimeErrorMapping.ts:318; flowEditorMetadata.ts:56; components/FlowRunReviewCheckpointPanel.svelte:369; ai-builder/builderStepPhrases.ts:22; owner jsonObject.ts:5",
+   "note": "All ~11 private object-check copies listed in the bead still exist (line numbers shifted). Behaviour-preserving, mechanical; some return the value rather than a boolean, so check truthiness per site as the bead says. aiBuilderError.ts:23 still intentionally accepts arrays."
+  }
+ },
+ {
+  "id": "eneo-qyf",
+  "title": "Flows API: audit request-scoped commits on mutating routes (read-after-write race after 201)",
+  "priority": 2,
+  "status": "open",
+  "description": "2026-09-15: three of 42 harness seedings failed within 20 ms of a 201 (404 on PATCH /flows/{id}/assistants/{aid}/ twice, 403 insufficient_scope on POST /flows/{id}/assistants/ once, which also refused the cleanup DELETE). Cause: FastAPI 0.141 request-scoped yield dependencies commit after the response is sent, so a client that creates a row and immediately addresses it can miss it. get_container(transaction_scope='function') exists for this and 8 routers use it; commit 8f7f931d6 (perf/ai-builder-step-context-index) moves the 5 mutating flow routes and 3 flow-assistant routes onto it with a route-wiring contract test (tests/unittests/flows/test_flow_router_transaction_scope.py). Remaining: ~340 get_container call sites default to request scope; every non-streaming mutating route whose result a client reads back immediately (AI Builder sessions/apply plan, flow runs, spaces' sub-resources, files) has the same exposure. Decide whether the default should invert (function scope by default, request scope opt-in for streaming routes, with the streaming test in test_container_dependency.py as the guard) instead of per-router opt-ins.",
+  "validation": {
+   "id": "eneo-qyf",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "robustness",
+   "real_improvement": false,
+   "priority_ok": "P3 or close for flows; the global default inversion is outside flows scope",
+   "evidence": "flows/api/flow_authoring_router.py:65-66 and flow_assistant_router.py:57-58 (_MUTATING_CONTAINER, transaction_scope='function'); flow_run_lifecycle_router.py:457-468,745 and flow_ai_builder_router.py:404 (explicit-transaction containers, commit before response); tests/unittests/flows/test_flow_router_transaction_scope.py",
+   "note": "The flow, assistant, run and AI Builder mutating routes now commit before the response. What remains is the app-wide default (~545 get_container sites in spaces, files and other non-flow routers), which is a cross-app decision outside flows. Report it to found-outside-scope.md rather than keeping this bead open."
+  }
+ },
+ {
+  "id": "eneo-r9jy",
+  "title": "Retry from a failed step rejects a validated prefix whose step text is file-backed",
+  "priority": 2,
+  "status": "open",
+  "description": "Found by the material gate (2026-09-20): application/flow_run_retry_service.py ~:245 refuses prefix seeding when a validated prefix result's text is a FileBackedStepText alias, although eneo-6h99.2 now makes such text consumable at input resolution with identity. After 6h99.2 lands: the retry prefix import must accept file-backed step text (copy the alias, keep the generated file reference and provenance; measure_prefix_results counts the logical bytes it already tracks), with a test that a retry after a spilled transcript re-runs only the failed step. Owner: FlowRunRetryService prefix import. No new codes.",
+  "validation": {
+   "id": "eneo-r9jy",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": true,
+   "priority_ok": "keep P2: retry after a spilled transcript is the main real-world retry case",
+   "evidence": "application/flow_run_retry_service.py:211-220, :242-246 and :287-291 refuse the prefix with reason file_backed_prefix_unsupported; asserted by tests/unit/flows/application/test_flow_run_retry_service.py:273,316,344; prerequisite file-backed text consumption exists in runtime/step_input_resolution.py:2217-2221 and variable_resolver.py:572-576",
+   "note": "Retry still rejects any prefix with file-backed step text, and unit tests lock in the refusal. The 6h99.2 precondition (file-backed text consumable at input resolution) is in place, so it is unblocked. Needs the alias copy with provenance plus a test that retry after a spilled transcript reruns only the failed step; the existing refusal tests must be replaced."
+  }
+ },
+ {
+  "id": "eneo-sdhq",
+  "title": "Flows: deeply nested model JSON may raise an untyped RecursionError in parse_json_output",
+  "priority": 3,
+  "status": "open",
+  "description": "Reported (unverified) by the A3 implementer: parse_json_output does not catch RecursionError from deeply nested model JSON. Verify with a probe (json.loads of ~100k nested arrays) and, if it escapes, map it to typed_io_output_parse_failed.",
+  "validation": {
+   "id": "eneo-sdhq",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "flows/output_processing.py:149-175 parse_json_output catches only (json.JSONDecodeError, ValueError); probe with PYTHONPATH=/tmp/flows-tip-read/backend/src: parse_json_output('['*100000+']'*100000) raises RecursionError (not typed_io_output_parse_failed); callers flows/runtime/output_formats/base.py:228 and json.py:32",
+   "note": "Verified by probe at the tip: RecursionError escapes untyped. Fix is small (catch RecursionError next to the JSON errors and raise TYPED_IO_OUTPUT_PARSE_FAILED); not checked how the step runner surfaces the generic exception today."
+  }
+ },
+ {
+  "id": "eneo-tpu3",
+  "title": "CI: run the flows migration step only in the migrations matrix suite",
+  "priority": 3,
+  "status": "open",
+  "description": "Gate s6-idx round 2 P3: the 'Verify flows migrations' step (.github/workflows/ci.yml, added by S6-idx a656ea9f5) has no matrix condition and runs in the unit job, four integration shards and the migration job. Add 'if: matrix.suite == migrations' like the File/Icon step. Bundle into the next slice that touches ci.yml (e.g. S6a-1).",
+  "validation": {
+   "id": "eneo-tpu3",
+   "scope": "flows_docs_ci",
+   "state": "still_true",
+   "category": "maintainability",
+   "real_improvement": true,
+   "priority_ok": "keep P3 (CI minutes only)",
+   "evidence": ".github/workflows/ci.yml:294-299 'Verify flows migrations' has no if:; matrix.suite conditions exist at :267, :271, :302; the 'Verify crawler migration rollback' step at ~:284-292 also lacks a condition",
+   "note": "The step still runs in the unit job, four integration shards and the migrations job. Adding if: matrix.suite == 'migrations' removes redundant docker migration runs; check first that the migrations suite actually owns the migration_isolation marker run so no coverage is lost. Lane is CI-config, gate-exempt class. The bead's label (retention) is misleading; the crawler step beside it has the same flaw but is outside flows scope."
+  }
+ },
+ {
+  "id": "eneo-uwbv",
+  "title": "Long transcripts: review editing, corrections, speaker mapping, retry and regeneration on a file-backed transcript",
+  "priority": 3,
+  "status": "open",
+  "description": "Deferred from eneo-6h99.4 on 2026-09-21 after its Astra spec validation (MIN 5, finding 4 and finding 5). Once a transcript above the inline cap spills to a text artifact, these owners still reject file-backed content and that rejection is PRESERVED deliberately by 6h99.4: review checkpoint editing (application/flow_run_review_checkpoint_service.py:447,:504), correction folding (flow_transcript_corrections_propagation.py:119), speaker mapping, which also rejects long renamed transcripts and synchronises the run variable by string equality (runtime/step_handlers/speaker_mapping.py:234,:284), prefix retry (application/flow_run_retry_service.py:245,:296) and transcript regeneration (flow_transcript_regeneration_service.py:252). So a five-hour recording can be transcribed and summarised but not reviewed, corrected or retried.\n\nThis needs a DESIGN PASS before any spec, because two decisions are not mechanical. (1) Artifact layout: the material reader requires FileType.TEXT and verifies the complete text's bytes and hash (step_input_resolution.py:1397,:1468), so carrying text plus segments and words needs either a second artifact or a new reader contract; today segments and words are omitted above their own thresholds. (2) Revision semantics: checkpoint originals and edit history reference payloads across immutable revisions (infrastructure/flow_run_review_checkpoint_repo.py:759,:450), so a correction must publish a NEW artifact and a new alias, never overwrite the bytes an earlier revision references, and identity must be lineage across revisions rather than a mutable pointer. Frontend loading and editing of a file-backed transcript is in scope for that design, and the 6h99.4 frontend exclusion is lifted there.\n\nOwner rule: persistence and revision semantics are a Fable judgment moment. Depends on eneo-6h99.4.",
+  "validation": {
+   "id": "eneo-uwbv",
+   "scope": "flows_core",
+   "state": "partly_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (Fable ruling: do not build)",
+   "evidence": "backend/src/eneo/flows/application/flow_run_review_checkpoint_service.py:518-523,:786; application/flow_run_retry_service.py:219,:245,:290 (file_backed_prefix_unsupported); runtime/step_handlers/speaker_mapping.py:256; main/config.py:442 (flow_max_inline_text_bytes = 8 MiB)",
+   "note": "The file-backed refusals still exist, but the bead's own 2026-09-21 ruling shows the spill happens only above 8 MiB of text (~40 h of speech), so a 5 h recording never hits them. Entry conditions are recorded and the work is parked; nothing to fix now."
+  }
+ },
+ {
+  "id": "eneo-v7xp",
+  "title": "Flows: a tool-argument check queued behind a slow contract reports typed_io_tool_invalid_schema",
+  "priority": 3,
+  "status": "open",
+  "description": "A3 (e8d002317) makes queue wait count against a check's limit (decided rule). One serialized checker child per loop: a slow or hostile contract can make another run's tool-argument check time out while queued, and tool_input.py:525-530 maps ArgumentCheckUnfinished to typed_io_tool_invalid_schema, whose action blames the MCP server's schema. Options: a small checker pool, or a distinct not-checked cause for tool arguments.",
+  "validation": {
+   "id": "eneo-v7xp",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "flows/runtime/tool_input.py:525-532 maps ArgumentCheckUnfinished to TYPED_IO_TOOL_INVALID_SCHEMA; the sibling contract path already uses the distinct code at flows/runtime/contract_check.py:56-68 (TYPED_IO_CONTRACT_NOT_CHECKED, 'it was not found invalid')",
+   "note": "Misclassification confirmed: a check that did not finish blames the MCP server's schema. The owner comment already prefers the distinct not-checked cause over a pool; the contract path shows the pattern to reuse (public error-code catalog and docs/SDK codes would need the new or reused code)."
+  }
+ },
+ {
+  "id": "eneo-w1gr",
+  "title": "Word template heading preview: skip leading whitespace in the 200-char budget; slice runs before accumulating; inherited heading styles",
+  "priority": 3,
+  "status": "open",
+  "description": "sync-v1c gate it2 (553fb70ed, GREEN) P3 residue: (1) whitespace runs consume the HEADING_PREVIEW_MAX_CHARS budget before visible text (9 runs x 100 spaces + 'Visible title' -> only the ellipsis); exclude leading whitespace from the visible budget. (2) a single 100k-char run is yielded whole before the cutoff check (transient, not retained): slice pieces before accumulating. (3) custom heading styles inheriting 'Heading N' are not recognized (docx_content_controls.py ~413). Owner v1 branch has the same heading code.",
+  "validation": {
+   "id": "eneo-w1gr",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "bug",
+   "real_improvement": true,
+   "priority_ok": "keep P3",
+   "evidence": "backend/src/eneo/flows/runtime/document_rendering/docx_content_controls.py:418-434 (_heading_preview), :442-451 (_preceding_heading)",
+   "note": "_heading_preview accumulates whitespace pieces into length and breaks at 4x200 chars, then strips, so leading whitespace eats the budget and a run of blank runs yields None. A single w:t run is yielded whole (_inline_pieces :404-411) before the cutoff. Custom styles inheriting Heading N are still unrecognised, as the docstring states (a documented limit, the weakest of the three). Cosmetic-level but real."
+  }
+ },
+ {
+  "id": "eneo-wsv",
+  "title": "Flow editor: aggregate flush must recheck combined state after assistant saves",
+  "priority": 2,
+  "status": "open",
+  "description": "Found by the autosave gate (pass 3, pre-existing on tidy 9340dc05f): FlowEditor.flushSaves() awaits flushFlowSaves() then flushAssistantSaves() without rechecking the combined state. Repro: hold an assistant PATCH, start flushSaves(), edit the flow name, complete the assistant PATCH -> flush resolves with status unsaved, dirty, zero flow requests; beforeNavigate then navigates away. Fix: after both phases recheck the unified state and drain again (or keep navigation blocked); add the delayed-assistant regression test.",
+  "validation": {
+   "id": "eneo-wsv",
+   "scope": "flows_web",
+   "state": "already_fixed",
+   "category": "bug",
+   "real_improvement": false,
+   "priority_ok": "close",
+   "evidence": "frontend/apps/web/src/lib/features/flows/FlowEditor.ts:672-680 (do/while loop re-flushes while hasPendingFlowSaves() || hasPendingAssistantSaves()); FlowEditor.test.ts:1885-1916 ('drains flow changes made while an assistant flush is in flight')",
+   "note": "flushSaves now loops until both flow and assistant saves are drained, and the delayed-assistant regression test exists."
+  }
+ },
+ {
+  "id": "eneo-x7w",
+  "title": "Tab and segmented controls animate with transition:all on a Material curve, unlike the rest of flows",
+  "priority": 3,
+  "status": "open",
+  "description": "Measured live 2026-09-14 on the flow page. All three tab-like controls (page tabs Byggare/Historik/AI-byggaren, the Enkel/Avancerad mode toggle, the Diagram/Detaljer view toggle) compute to transition-property: all, 0.15s, cubic-bezier(0.4, 0, 0.2, 1). That is Material's standard curve and an unnamed property list, while flows and the Builder now run on the recorded scale (--ease-smooth-out, named properties, 150/200/250 ms). The values come from the shared layout TabTrigger and the shared shadcn primitives, so they are outside the flows scope and changing them changes tabs across the whole product. Decide app-wide: name the properties instead of all, and move the curve onto the recorded easing. Tab panels themselves switch instantly, which is correct for a frequent navigation action; the Builder's own screen entrance is the only content motion and should stay a screen-state animation, not become a tab effect.",
+  "validation": {
+   "id": "eneo-x7w",
+   "scope": "other",
+   "state": "still_true",
+   "category": "quality",
+   "real_improvement": false,
+   "priority_ok": "P4 or close: app-wide shared shadcn primitive, outside flows scope",
+   "evidence": "frontend/apps/web/src/lib/components/ui/tabs/tabs-trigger.svelte:16 (transition-all); --ease-smooth-out defined in src/app.css:220",
+   "note": "The shared tab trigger still uses transition-all with the default curve. The bead itself says it is outside flows scope and changes tabs product-wide; cosmetic with no measurable gain."
+  }
+ },
+ {
+  "id": "eneo-xddt",
+  "title": "Citation tracking for JSON completion output (section records and summarize folds carry no citations today)",
+  "priority": 3,
+  "status": "open",
+  "description": "Found 2026-09-21 10:48 when the summarize-fold worker blocked correctly: citation capability is text-only in three owners: flow_capability_manifest.py:749 defines it as text-only, flow_validators.py:724 rejects citation mode for non-text output, and step_execution_runtime.py:1029 disables tracking for JSON output. Consequence: section-processing records (JSON) and therefore summarize folds carry no citations, so a grounded material summarised over sections loses its source identities downstream. The worker's proposed owner-level change, recorded for a design pass: extend the existing inline_inref_sidecar capability to JSON completion output, align validation and runtime selection, and extract and strip references within JSON string values while preserving the authored schema, with a grounded-input execution regression rather than injected ids. Needs a design pass before a spec; not part of eneo-6h99.5, whose contract now states that records inherit citations when parents carry any and carry none otherwise.",
+  "validation": {
+   "id": "eneo-xddt",
+   "scope": "flows_core",
+   "state": "still_true",
+   "category": "feature",
+   "real_improvement": false,
+   "priority_ok": "keep P3 (design pass first, no demand evidence)",
+   "evidence": "backend/src/eneo/flows/flow_validators.py:852-872 (requires output_type 'text'); backend/src/eneo/flows/runtime/step_execution_runtime.py:1056-1068 (JSON output -> CITATION_MODE_OFF); backend/src/eneo/flows/flow_capability_manifest.py:780-790 (TEXT-only)",
+   "note": "All three owners still make citation mode text-only. A capability gap that needs a design pass, not a defect; JSON-string citation extraction is a sizeable feature with no demand signal."
+  }
+ }
+]
